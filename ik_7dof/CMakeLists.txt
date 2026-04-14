@@ -14,10 +14,16 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
+
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(srdfdom REQUIRED)
 
+find_package(moveit_ros_planning_interface REQUIRED)
+find_package(moveit_core REQUIRED)
+find_package(moveit_msgs REQUIRED)
 # 2. 创建库 (IK 解算器)
 add_library(ik_solver_lib
   src/ik_solver.cpp
@@ -79,6 +85,10 @@ ament_target_dependencies(arm_ik_rviz_node
   tf2_ros
   geometry_msgs
   sensor_msgs
+  std_srvs
+  moveit_ros_planning_interface
+  moveit_core
+  srdfdom
 )
 
 # 链接你自己的库

@@ -15,3 +15,6 @@ initial_positions:
   right_wrist_pitch_joint: 0
   right_wrist_roll_joint: 0
   right_wrist_yaw_joint: 0
+  waist_pitch_joint: 0
+  waist_roll_joint: 0
+  waist_yaw_joint: 0

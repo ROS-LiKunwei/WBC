@@ -10,10 +10,13 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  
+  <depend>std_srvs</depend>
   <depend>eigen3_cmake_module</depend>
   <depend>libeigen3-dev</depend>
-
+  <depend>moveit_ros_planning_interface</depend>
+  <depend>moveit_core</depend>
+  <depend>srdfdom</depend>
+  <depend>moveit_msgs</depend>
   <depend>pinocchio</depend>
 
   <build_depend>eigen</build_depend>

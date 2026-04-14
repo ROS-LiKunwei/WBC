@@ -11,6 +11,10 @@ controller_manager:
       type: joint_trajectory_controller/JointTrajectoryController
 
 
+    body_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -39,6 +43,17 @@ rightArm_controller:
       - right_wrist_yaw_joint
       - right_wrist_pitch_joint
       - right_wrist_roll_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+body_controller:
+  ros__parameters:
+    joints:
+      - waist_yaw_joint
+      - waist_roll_joint
+      - waist_pitch_joint
     command_interfaces:
       - position
     state_interfaces:
