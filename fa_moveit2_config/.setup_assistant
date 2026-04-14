@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: sysmo_description
+    relative_path: urdf/fa_robot.urdf
+  srdf:
+    relative_path: config/fa_robot.srdf
+  package_settings:
+    author_name: LiKunwei
+    author_email: 821687420@qq.com
+    generated_timestamp: 1776133503
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
