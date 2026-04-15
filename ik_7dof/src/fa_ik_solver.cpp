@@ -249,7 +249,7 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             weights << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
         }
         // 应用权重
-        VectorXd weighted_err = err.cwiseProduct(weights);
+        VectorXd weighted_err = err.cwiseProduct(weights); // coefficient-wise product，逐元素对应相乘，并生成一个新的同维度向量
 
         // 计算雅可比
         MatrixXd J_full = MatrixXd::Zero(6, model.nv);
@@ -287,12 +287,12 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                 double range = limits.second[i] - limits.first[i];
                 double margin = range * threshold_percent; 
                 
-                // 计算限位斥力 (高优)
+                // 计算限位斥力 (高优)   斥力 = 增益系数 * ((边界厚度 - 当前距离) / 边界厚度)^2
                 double limit_repulsion = 0.0;
                 if (dist_to_upper < margin) {
-                    limit_repulsion = -0.01 * std::pow((0.1 - dist_to_upper)/0.1, 2); 
+                    limit_repulsion = -0.01 * std::pow((margin - dist_to_upper)/margin, 2); 
                 } else if (dist_to_lower < margin) {
-                    limit_repulsion = 0.01 * std::pow((0.1 - dist_to_lower)/0.1, 2);
+                    limit_repulsion = 0.01 * std::pow((margin - dist_to_lower)/margin, 2);
                 }
                 
                 // 计算舒适姿态拉力 (低优)
