@@ -1,0 +1,35 @@
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# CMake 构建产物
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+colcon_*
+
+# 临时文件
+*.tmp
+*.bak
+
+# 日志文件
+*.log
+
+# 用户指定的屏蔽文件夹
+.vscode/
+humanoid_description/
+humanoid_moveit2_config/
