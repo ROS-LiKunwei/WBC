@@ -22,9 +22,15 @@ def generate_launch_description():
         description='SRDF file path'
     )
     
+    arm_side_arg = DeclareLaunchArgument(
+        'arm_side',
+        default_value='left',
+        description='Arm side: left or right'
+    )
+    
     num_tests_arg = DeclareLaunchArgument(
         'num_tests',
-        default_value='100',
+        default_value='10000',
         description='Number of test iterations'
     )
     
@@ -43,12 +49,13 @@ def generate_launch_description():
     # 创建节点
     ik_test_node = Node(
         package='ik_7dof',
-        executable='fa_left_arm_ik_node',
-        name='fa_left_arm_ik_node',
+        executable='fa_arm_kinematic_node',
+        name='fa_arm_kinematic_node',
         output='screen',
         parameters=[{
             'urdf_file': LaunchConfiguration('urdf_file'),
             'srdf_file': LaunchConfiguration('srdf_file'),
+            'arm_side': LaunchConfiguration('arm_side'),
             'num_tests': LaunchConfiguration('num_tests'),
             'max_iters': LaunchConfiguration('max_iters'),
             'eps': LaunchConfiguration('eps'),
@@ -58,6 +65,7 @@ def generate_launch_description():
     return LaunchDescription([
         urdf_file_arg,
         srdf_file_arg,
+        arm_side_arg,
         num_tests_arg,
         max_iters_arg,
         eps_arg,

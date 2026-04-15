@@ -9,19 +9,21 @@
 #include <chrono>
 using namespace left_arm_ik_test;
 
-class FaLeftArmIKNode : public rclcpp::Node
+class FaArmKinematicNode : public rclcpp::Node
 {
 public:
-    FaLeftArmIKNode() : Node("fa_left_arm_ik_node")
+    FaArmKinematicNode() : Node("fa_arm_kinematic_node")
     {
         this->declare_parameter<std::string>("urdf_file", "");
         this->declare_parameter<std::string>("srdf_file", "");
+        this->declare_parameter<std::string>("arm_side", "left");
         this->declare_parameter<int>("num_tests", 10);
         this->declare_parameter<int>("max_iters", 200);
         this->declare_parameter<double>("eps", 1e-3);
 
         std::string urdf_file = this->get_parameter("urdf_file").as_string();
         std::string srdf_file = this->get_parameter("srdf_file").as_string();
+        std::string arm_side_str = this->get_parameter("arm_side").as_string();
         num_tests_ = this->get_parameter("num_tests").as_int();
         max_iters_ = this->get_parameter("max_iters").as_int();
         eps_ = this->get_parameter("eps").as_double();
@@ -31,8 +33,17 @@ public:
             return;
         }
 
+        if (arm_side_str == "right") {
+            arm_side_ = ArmSide::RIGHT;
+            arm_name_ = "右臂";
+        } else {
+            arm_side_ = ArmSide::LEFT;
+            arm_name_ = "左臂";
+        }
+
         RCLCPP_INFO(this->get_logger(), "URDF文件: %s", urdf_file.c_str());
         RCLCPP_INFO(this->get_logger(), "SRDF文件: %s", srdf_file.c_str());
+        RCLCPP_INFO(this->get_logger(), "手臂: %s", arm_name_.c_str());
         RCLCPP_INFO(this->get_logger(), "测试次数: %d", num_tests_);
 
         try {
@@ -47,13 +58,13 @@ public:
 private:
     void printJointInfo()
     {
-        RCLCPP_INFO(this->get_logger(), "FA左臂关节 (%zu 个):", solver_->getLeftArmJointCount());
-        const auto& joint_names = solver_->getLeftArmJointNames();
+        RCLCPP_INFO(this->get_logger(), "FA%s关节 (%zu 个):", arm_name_.c_str(), solver_->getArmJointCount(arm_side_));
+        const auto& joint_names = solver_->getArmJointNames(arm_side_);
         for (size_t i = 0; i < joint_names.size(); ++i) {
             RCLCPP_INFO(this->get_logger(), "  %2zu: %s", i, joint_names[i].c_str());
         }
 
-        auto limits = solver_->getJointLimits();
+        auto limits = solver_->getArmJointLimits(arm_side_);
         RCLCPP_INFO(this->get_logger(), "关节限制（从URDF读取）:");
         for (size_t i = 0; i < joint_names.size(); ++i) {
             RCLCPP_INFO(this->get_logger(), "  %s: [%.3f, %.3f]",
@@ -63,9 +74,10 @@ private:
 
     void runValidation()
     {
-        RCLCPP_INFO(this->get_logger(), "========== FA左臂正逆解验证开始 ==========");
+        RCLCPP_INFO(this->get_logger(), "========== FA%s正逆解验证开始 ==========", arm_name_.c_str());
 
-        std::ofstream log_file("fa_ik_failed_cases.log", std::ios::out);
+        std::string log_filename = std::string("fa_") + (arm_side_ == ArmSide::LEFT ? "left" : "right") + "_arm_ik_failed_cases.log";
+        std::ofstream log_file(log_filename, std::ios::out);
         if (log_file.is_open()) {
             log_file << "Test_ID, Target_X, Target_Y, Target_Z, Target_R, Target_P, Target_Y, "
                      << "True_q1, True_q2, True_q3, True_q4, True_q5, True_q6, True_q7\n";
@@ -78,8 +90,8 @@ private:
         double total_time_ms = 0.0;
         long total_steps = 0;
 
-        auto limits = solver_->getJointLimits();
-        const auto& joint_names = solver_->getLeftArmJointNames();
+        auto limits = solver_->getArmJointLimits(arm_side_);
+        const auto& joint_names = solver_->getArmJointNames(arm_side_);
 
         for (int test = 0; test < num_tests_; ++test) {
             RCLCPP_INFO(this->get_logger(), "\n--- 测试 %d/%d ---", test + 1, num_tests_);
@@ -98,7 +110,7 @@ private:
                 }
             }
 
-            auto fk_result = solver_->computeLeftArmFK_SE3(q_rand);
+            auto fk_result = solver_->computeArmFK_SE3(q_rand, arm_side_);
 
             pinocchio::SE3 T_target;
             T_target.translation(fk_result.p);
@@ -106,8 +118,8 @@ private:
 
             int iters = 0;
             auto start = std::chrono::high_resolution_clock::now();
-            Eigen::VectorXd q_solved = solver_->solveLeftArmIK(
-                T_target, Eigen::VectorXd(), max_iters_, eps_, &iters);
+            Eigen::VectorXd q_solved = solver_->solveArmIK(
+                T_target, arm_side_, Eigen::VectorXd(), max_iters_, eps_, &iters);
             auto end = std::chrono::high_resolution_clock::now();
 
             bool consistency_ok = false;
@@ -116,7 +128,7 @@ private:
                 RCLCPP_ERROR(this->get_logger(), "逆运动学求解失败！");
                 is_failed = true;
             } else {
-                auto fk_verify_se3 = solver_->computeLeftArmFK_SE3(q_solved);
+                auto fk_verify_se3 = solver_->computeArmFK_SE3(q_solved, arm_side_);
 
                 double pos_error = (fk_result.p - fk_verify_se3.p).norm();
                 Eigen::Matrix3d R_diff = fk_result.R.transpose() * fk_verify_se3.R;
@@ -160,7 +172,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "总测试次数: %d", num_tests_);
         RCLCPP_INFO(this->get_logger(), "成功次数: %d", success_count);
         RCLCPP_INFO(this->get_logger(), "算法分布统计:");
-        RCLCPP_INFO(this->get_logger(), "  - 第一阶段 (QR) 成功: %d", solver_->stats_.qr_stage_success);
+        RCLCPP_INFO(this->get_logger(), "  - 第一阶段 (LDLT) 成功: %d", solver_->stats_.qr_stage_success);
         RCLCPP_INFO(this->get_logger(), "  - 第二阶段 (SVD) 成功: %d", solver_->stats_.svd_stage_success);
         if (success_count > 0) {
             RCLCPP_INFO(this->get_logger(), "平均成功耗时: %.4f ms", total_time_ms / success_count);
@@ -172,6 +184,7 @@ private:
 
         if (log_file.is_open()) {
             log_file.close();
+            RCLCPP_INFO(this->get_logger(), "失败案例已保存至: %s", log_filename.c_str());
         }
     }
 
@@ -179,12 +192,14 @@ private:
     int num_tests_;
     int max_iters_;
     double eps_;
+    ArmSide arm_side_;
+    std::string arm_name_;
 };
 
 int main(int argc, char* argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<FaLeftArmIKNode>());
+    rclcpp::spin(std::make_shared<FaArmKinematicNode>());
     rclcpp::shutdown();
     return 0;
 }

@@ -1,5 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include "ik_7dof/ik_solver.hpp"
+#include "ik_7dof/fa_ik_solver.hpp"
 #include <Eigen/Dense>
 #include <iostream>
 #include <iomanip>
@@ -30,6 +30,7 @@ public:
         this->declare_parameter<double>("eps", 1e-3);
         this->declare_parameter<double>("move_delay", 1.0);
         this->declare_parameter<double>("trajectory_duration", 2.0);
+        this->declare_parameter<std::string>("arm_side", "left"); // left or right
         
         std::string urdf_file = this->get_parameter("urdf_file").as_string();
         std::string srdf_file = this->get_parameter("srdf_file").as_string();
@@ -38,6 +39,18 @@ public:
         eps_ = this->get_parameter("eps").as_double();
         move_delay_ = this->get_parameter("move_delay").as_double();
         trajectory_duration_ = this->get_parameter("trajectory_duration").as_double();
+        
+        // 解析手臂选择参数
+        std::string arm_side_str = this->get_parameter("arm_side").as_string();
+        if (arm_side_str == "right") {
+            arm_side_ = ArmSide::RIGHT;
+            move_group_name_ = "rightArm";
+            home_state_name_ = "rightArmHome";
+        } else {
+            arm_side_ = ArmSide::LEFT;
+            move_group_name_ = "leftArm";
+            home_state_name_ = "leftArmHome";
+        }
         
         if (urdf_file.empty()) {
             RCLCPP_ERROR(this->get_logger(), "必须提供urdf_file参数");
@@ -84,7 +97,7 @@ private:
     Eigen::VectorXd getHomeJointValues(std::shared_ptr<rclcpp::Node> node)
     {
         // 1. 初始化 MoveGroupInterface
-        moveit::planning_interface::MoveGroupInterface move_group(node, "leftArm");
+        moveit::planning_interface::MoveGroupInterface move_group(node, move_group_name_);
 
         // 2. 获取当前的 RobotState 指针
         moveit::core::RobotStatePtr kinematic_state = move_group.getCurrentState();
@@ -95,11 +108,11 @@ private:
 
         // 3. 获取对应的 JointModelGroup
         const moveit::core::JointModelGroup* joint_model_group = 
-            kinematic_state->getJointModelGroup("leftArm");
+            kinematic_state->getJointModelGroup(move_group_name_);
 
         // 4. ✨ 核心步骤：将这个状态对象强制设置为 SRDF 中定义的状态
         // 如果找不到该名字，会返回 false
-        bool found = kinematic_state->setToDefaultValues(joint_model_group, "leftArmHome");
+        bool found = kinematic_state->setToDefaultValues(joint_model_group, home_state_name_);
         
         if (found) {
             // 5. 提取出具体的关节角度
@@ -108,7 +121,7 @@ private:
 
             // 6. 打印验证
             const std::vector<std::string>& joint_names = joint_model_group->getVariableNames();
-            RCLCPP_INFO(node->get_logger(), "--- leftArmHome 关节角度 ---");
+            RCLCPP_INFO(node->get_logger(), "--- %s 关节角度 ---", home_state_name_.c_str());
             for (size_t i = 0; i < joint_names.size(); ++i) {
                 RCLCPP_INFO(node->get_logger(), "%s: %.4f", joint_names[i].c_str(), home_joint_values[i]);
             }
@@ -116,13 +129,13 @@ private:
             // 7. 转换为 Eigen::VectorXd 并返回
             return Eigen::Map<Eigen::VectorXd>(home_joint_values.data(), home_joint_values.size());
         } else {
-            RCLCPP_WARN(node->get_logger(), "在 SRDF 中未找到名为 'leftArmHome' 的状态！");
+            RCLCPP_WARN(node->get_logger(), "在 SRDF 中未找到名为 '%s' 的状态！", home_state_name_.c_str());
             return Eigen::VectorXd();
         }
     }
 
     /**
-     * @brief 移动到leftArmHome状态
+     * @brief 移动到home状态
      */
     void moveToHomeState(std::shared_ptr<rclcpp::Node> node)
     {
@@ -130,7 +143,7 @@ private:
         RCLCPP_INFO(node->get_logger(), "等待控制器启动...");
         std::this_thread::sleep_for(std::chrono::seconds(5));
         
-        moveit::planning_interface::MoveGroupInterface move_group(node, "leftArm");
+        moveit::planning_interface::MoveGroupInterface move_group(node, move_group_name_);
 
         // 设置规划时间
         move_group.setPlanningTime(5.0);
@@ -148,15 +161,15 @@ private:
         }
         
         // ✨ 核心步骤：直接设置命名目标
-        move_group.setNamedTarget("leftArmHome");
+        move_group.setNamedTarget(home_state_name_);
 
         // 执行运动 - 使用 move() 方法，它会自动处理规划和执行
-        RCLCPP_INFO(node->get_logger(), "开始规划并执行到 leftArmHome...");
+        RCLCPP_INFO(node->get_logger(), "开始规划并执行到 %s...", home_state_name_.c_str());
         bool success = (move_group.move() == moveit::core::MoveItErrorCode::SUCCESS);
         if (success) {
-            RCLCPP_INFO(node->get_logger(), "执行到 leftArmHome 成功！");
+            RCLCPP_INFO(node->get_logger(), "执行到 %s 成功！", home_state_name_.c_str());
         } else {
-            RCLCPP_ERROR(node->get_logger(), "执行到 leftArmHome 失败！");
+            RCLCPP_ERROR(node->get_logger(), "执行到 %s 失败！", home_state_name_.c_str());
         }
     }
 
@@ -165,13 +178,14 @@ private:
      */
     void printJointInfo()
     {
-        RCLCPP_INFO(this->get_logger(), "左臂关节 (%zu 个):", solver_->getLeftArmJointCount());
-        const auto& joint_names = solver_->getLeftArmJointNames();
+        std::string arm_name = arm_side_ == ArmSide::LEFT ? "左臂" : "右臂";
+        RCLCPP_INFO(this->get_logger(), "%s关节 (%zu 个):", arm_name.c_str(), solver_->getArmJointCount(arm_side_));
+        const auto& joint_names = solver_->getArmJointNames(arm_side_);
         for (size_t i = 0; i < joint_names.size(); ++i) {
             RCLCPP_INFO(this->get_logger(), "  %2zu: %s", i, joint_names[i].c_str());
         }
         
-        auto limits = solver_->getJointLimits();
+        auto limits = solver_->getArmJointLimits(arm_side_);
         RCLCPP_INFO(this->get_logger(), "关节限制:");
         for (size_t i = 0; i < joint_names.size(); ++i) {
             double lower = limits.first[i];
@@ -262,26 +276,27 @@ private:
      */
     void runValidationAndMove()
     {
-        RCLCPP_INFO(this->get_logger(), "========== 左臂正逆解验证与运动开始 ==========");
+        std::string arm_name = arm_side_ == ArmSide::LEFT ? "左臂" : "右臂";
+        RCLCPP_INFO(this->get_logger(), "========== %s正逆解验证与运动开始 ==========", arm_name.c_str());
         
         std::random_device rd;
         std::mt19937 gen(rd());
         
         int success_count = 0;
         
-        auto limits = solver_->getJointLimits();
-        const auto& joint_names = solver_->getLeftArmJointNames();
+        auto limits = solver_->getArmJointLimits(arm_side_);
+        const auto& joint_names = solver_->getArmJointNames(arm_side_);
         
-        // 初始关节角度（从 SRDF 中读取的 leftArmHome 状态）
-        RCLCPP_INFO(this->get_logger(), "移动到 leftArmHome 状态...");
+        // 初始关节角度（从 SRDF 中读取的 home 状态）
+        RCLCPP_INFO(this->get_logger(), "移动到 %s 状态...", home_state_name_.c_str());
         moveToHomeState(shared_from_this());
         
-        // 获取 leftArmHome 状态的关节角度
+        // 获取 home 状态的关节角度
         Eigen::VectorXd current_q = getHomeJointValues(shared_from_this());
         
         // 如果获取失败，使用中性位姿作为备选
         if (current_q.size() == 0) {
-            RCLCPP_ERROR(this->get_logger(), "无法获取 leftArmHome 状态，使用中性位姿作为备选");
+            RCLCPP_ERROR(this->get_logger(), "无法获取 %s 状态，使用中性位姿作为备选", home_state_name_.c_str());
             return ;
         }
         
@@ -309,7 +324,7 @@ private:
             }
             
             // 2. 计算正运动学
-            PoseSE3 fk_result = solver_->computeLeftArmFK_SE3(q_rand);
+            PoseSE3 fk_result = solver_->computeArmFK_SE3(q_rand, arm_side_);
             RCLCPP_INFO(this->get_logger(), "正运动学结果:");
             RCLCPP_INFO(this->get_logger(), "  位置: [%.6f, %.6f, %.6f] m", 
                     fk_result.p.x(), fk_result.p.y(), fk_result.p.z());
@@ -322,8 +337,8 @@ private:
             // 4. 执行逆运动学求解
             int iters = 0;
             auto start = std::chrono::high_resolution_clock::now();
-            Eigen::VectorXd q_solved = solver_->solveLeftArmIK(
-                T_target, Eigen::VectorXd(), max_iters_, eps_, &iters);
+            Eigen::VectorXd q_solved = solver_->solveArmIK(
+                T_target, arm_side_, Eigen::VectorXd(), max_iters_, eps_, &iters);
             auto end = std::chrono::high_resolution_clock::now();
             
             // 5. 检查结果
@@ -338,7 +353,7 @@ private:
                 }
                 
                 // 验证正逆解一致性
-                auto fk_verify_se3 = solver_->computeLeftArmFK_SE3(q_solved);
+                auto fk_verify_se3 = solver_->computeArmFK_SE3(q_solved, arm_side_);
                 double pos_error = (fk_result.p - fk_verify_se3.p).norm();
                 Eigen::Matrix3d R_diff = fk_result.R.transpose() * fk_verify_se3.R;
                 Eigen::AngleAxisd angle_diff(R_diff);
@@ -360,7 +375,7 @@ private:
                 RCLCPP_INFO(this->get_logger(), "让 MoveIt 规划并移动到求解的关节角度...");
                 
                 // 实例化 MoveGroup
-                moveit::planning_interface::MoveGroupInterface move_group(shared_from_this(), "leftArm");
+                moveit::planning_interface::MoveGroupInterface move_group(shared_from_this(), move_group_name_);
                 
                 // 设置规划时间
                 move_group.setPlanningTime(5.0);
@@ -369,7 +384,7 @@ private:
                 std::vector<double> target_joint_values(q_solved.data(), q_solved.data() + q_solved.size());
                 
                 // 检查关节值是否在限位内
-                auto limits = solver_->getJointLimits();
+                auto limits = solver_->getArmJointLimits(arm_side_);
                 bool within_limits = true;
                 for (int i = 0; i < 7; ++i) {
                     if (target_joint_values[i] < limits.first[i] || target_joint_values[i] > limits.second[i]) {
@@ -420,6 +435,9 @@ private:
     double eps_;
     double move_delay_;
     double trajectory_duration_;
+    ArmSide arm_side_;
+    std::string move_group_name_;
+    std::string home_state_name_;
 };
 
 int main(int argc, char** argv)

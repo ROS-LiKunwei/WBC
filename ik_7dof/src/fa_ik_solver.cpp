@@ -191,26 +191,29 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     int max_iters,
     double eps,
     int& iters_out,
-    bool use_robust_svd)
+    SolverMethod method,
+    ArmSide arm_side)
 {
     using namespace pinocchio;
     using namespace Eigen;
 
     Model& model = pimpl_->model_;
     Data& data = *pimpl_->data_;
-    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame_);
-    const int n_arm = left_arm_joints_.size();
+    const std::string& ee_frame = arm_side == ArmSide::LEFT ? left_ee_frame_ : right_ee_frame_;
+    const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
+    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame);
+    const int n_arm = arm_joints.size();
 
     VectorXd q = neutral(model);
     for (int i = 0; i < n_arm; ++i) {
-        int qi = model.joints[model.getJointId(left_arm_joints_[i])].idx_q();
+        int qi = model.joints[model.getJointId(arm_joints[i])].idx_q();
         q[qi] = q_init[i];
     }
 
     // --- 根据模式设置初始阻 ---
     // 快速模式 (LDLT/QR) 建议阻尼稍微大一点，增加稳定性
     // 稳健模式 (SVD) 阻尼可以小一点，因为 SVD 本身有截断逻辑
-    double lambda = use_robust_svd ? 1e-3 : 1e-2;
+    double lambda = method == SolverMethod::SVD ? 1e-3 : 1e-2;
     VectorXd grad_H = VectorXd::Zero(n_arm);
     
     for (int iter = 0; iter < max_iters; ++iter) {
@@ -229,7 +232,7 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         if (error_norm < eps) {
             VectorXd res(n_arm);
             for (int i = 0; i < n_arm; ++i)
-                res[i] = q[model.joints[model.getJointId(left_arm_joints_[i])].idx_q()];
+                res[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             return res;
         }
 
@@ -254,178 +257,115 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         
         MatrixXd J_arm(6, n_arm);
         for (int i = 0; i < n_arm; ++i) {
-            J_arm.col(i) = J_full.col(model.joints[model.getJointId(left_arm_joints_[i])].idx_v());
+            J_arm.col(i) = J_full.col(model.joints[model.getJointId(arm_joints[i])].idx_v());
         }
 
-        VectorXd dq;
+        // =====================================================================
+        // 统一计算零空间避障斥力 (grad_H) && 舒适姿态拉力
+        // =====================================================================
+        grad_H.setZero(); 
+        double repulsion_gain = 0.0;
         
-        
-        if (!use_robust_svd) {
-            MatrixXd JJt = J_arm * J_arm.transpose();
-            JJt.diagonal().array() += (lambda * lambda);
-            // 使用加权后的 weighted_err
-            // dq = J_arm.transpose() * JJt.colPivHouseholderQr().solve(weighted_err);
-            dq = J_arm.transpose() * JJt.ldlt().solve(weighted_err);
-        } else {
-            JacobiSVD<MatrixXd> svd(J_arm, ComputeThinU | ComputeThinV);
-            VectorXd sv = svd.singularValues();
-            VectorXd sv_inv = sv;
-            for (int i = 0; i < sv.size(); ++i) {
-                // 提高奇异值截断阈值到 1e-4 以增强稳定性
-                sv_inv(i) = (sv(i) > 1e-4) ? (1.0 / sv(i)) : 0.0;
-            }
-
-            MatrixXd J_pinv = svd.matrixV() * sv_inv.asDiagonal() * svd.matrixU().transpose();
-            
-            // 基础解使用加权后的 weighted_err
-            dq = J_pinv * weighted_err;
-
-            // 冗余项：零空间投影
-            auto limits = getJointLimits();
+        // 只有在误差较大时才施加斥力&&舒适姿态拉力，避免干扰最后 1e-3 精度的精调收敛
+        if (error_norm >= 1e-2) { 
+            auto limits = getArmJointLimits(arm_side);
             VectorXd q_arm(n_arm);
             for(int i=0; i<n_arm; ++i){
-                q_arm[i] = q[model.joints[model.getJointId(left_arm_joints_[i])].idx_q()];
+                q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             } 
-            
-            
+
+            // 定义手臂自然下垂状态(全0)为最舒适状态。
+            VectorXd q_rest = VectorXd::Zero(n_arm); 
+            // 舒适姿态的拉力系数（要比较小，不能喧宾夺主）
+            double k_rest = 0.05;
+
             const double threshold_percent = 0.05; // 5% 的边缘触发力场
 
             for(int i=0; i<n_arm; ++i) {
                 double dist_to_upper = limits.second[i] - q_arm[i];
                 double dist_to_lower = q_arm[i] - limits.first[i];
                 double range = limits.second[i] - limits.first[i];
-                double margin = range * threshold_percent; // 触发危险区的距离
+                double margin = range * threshold_percent; 
                 
-                if (dist_to_upper < margin) 
-                    grad_H[i] = -0.01 * std::pow((0.1 - dist_to_upper)/0.1, 2); // 越近推力越大
-                else if (dist_to_lower < margin)
-                    grad_H[i] = 0.01 * std::pow((0.1 - dist_to_lower)/0.1, 2);
-                // 安全区：grad_H[i] 保持为 0，不干扰主任务求解
+                // 计算限位斥力 (高优)
+                double limit_repulsion = 0.0;
+                if (dist_to_upper < margin) {
+                    limit_repulsion = -0.01 * std::pow((0.1 - dist_to_upper)/0.1, 2); 
+                } else if (dist_to_lower < margin) {
+                    limit_repulsion = 0.01 * std::pow((0.1 - dist_to_lower)/0.1, 2);
+                }
+                
+                // 计算舒适姿态拉力 (低优)
+                double comfort_pull = -k_rest * (q_arm[i] - q_rest[i]);
+
+                // 叠加梯度：当靠近限位时，limit_repulsion 会急剧变大，掩盖住 comfort_pull
+                grad_H[i] = limit_repulsion + comfort_pull;
             }
 
-            // 对斥力梯度做简单的限幅，防止分母过小导致数值爆炸
+            // 对斥力梯度做简单的限幅
             double max_grad = 10.0;
             for(int i=0; i<n_arm; ++i) 
                 grad_H[i] = std::max(-max_grad, std::min(max_grad, grad_H[i]));
 
-            // 投影到零空间
-            MatrixXd J_pinvZero = svd.matrixV() * sv_inv.asDiagonal() * svd.matrixU().transpose();
-            MatrixXd NullSpace = MatrixXd::Identity(n_arm, n_arm) - J_pinvZero * J_arm;
-
-            // 最终增量 = 任务增量 + 零空间斥力
-            // 注意：这里的增益系数可以根据实际效果微调,将其作为一种“软约束”而非“强推力”。
-            double repulsion_gain = (error_norm < 0.05) ? 0.0 : 0.001;
-            dq += NullSpace * (repulsion_gain * grad_H);
+            repulsion_gain = (error_norm < 0.05) ? 0.0 : 0.001;
         }
 
-        // --- 【修改点 2: 自适应步长】 ---
-        // 误差大时（离目标远），步长小一点防止飞掉；误差小时（接近目标），步长大一点加速收敛;这样即便斥力很大，也会被 adaptive_dt 压住，保证平稳地推回安全区。
+        // 基础斥力向量
+        VectorXd g0 = repulsion_gain * grad_H;
+        VectorXd dq;
+        
+        // =====================================================================
+        // LDLT 和 SVD 的求解分支
+        // =====================================================================
+        if (method == SolverMethod::LDLT) {
+            MatrixXd JJt = J_arm * J_arm.transpose();
+            JJt.diagonal().array() += (lambda * lambda);
+            
+            // 使用数学等效变形：dq = J# * e + (I - J#*J)*g0 转换为 dq = J# * (e - J*g0) + g0
+            // 这样能在一行 LDLT 求解中同时实现：DLS 阻尼 + 零空间避障
+            VectorXd modified_err = weighted_err - J_arm * g0;
+            dq = J_arm.transpose() * JJt.ldlt().solve(modified_err) + g0;
+
+        } else {
+            JacobiSVD<MatrixXd> svd(J_arm, ComputeThinU | ComputeThinV);
+            VectorXd sv = svd.singularValues();
+            VectorXd sv_inv = sv;
+            for (int i = 0; i < sv.size(); ++i) {
+                sv_inv(i) = (sv(i) > 1e-4) ? (1.0 / sv(i)) : 0.0;
+            }
+
+            MatrixXd J_pinv = svd.matrixV() * sv_inv.asDiagonal() * svd.matrixU().transpose();
+            MatrixXd NullSpace = MatrixXd::Identity(n_arm, n_arm) - J_pinv * J_arm;
+            
+            // SVD 下直接使用计算好的伪逆和零空间矩阵
+            dq = J_pinv * weighted_err + NullSpace * g0;
+        }
+
+        // --- 自适应步长 ---
         double adaptive_dt = (error_norm > 1e-1) ? 0.2 : 0.6; 
 
         // 更新 q 并截断限位
         for (int i = 0; i < n_arm; ++i) {
-            int qi = model.joints[model.getJointId(left_arm_joints_[i])].idx_q();
-            q[qi] += dq[i] * adaptive_dt; // 使用自适应步长
+            int qi = model.joints[model.getJointId(arm_joints[i])].idx_q();
+            q[qi] += dq[i] * adaptive_dt;
             q[qi] = std::max(model.lowerPositionLimit[qi], std::min(model.upperPositionLimit[qi], q[qi]));
         }
 
         // 只有当误差确实很小时，才减小阻尼以加速最后收敛
         if (error_norm < 1e-2) {
-            lambda = use_robust_svd ? 1e-4 : 1e-3;
-            // 进入精调阶段：关闭零空间，使用全步长
+            lambda = method == SolverMethod::SVD ? 1e-4 : 1e-3;
             adaptive_dt = 1.0;
-            // 如果是 SVD 模式，可以将 grad_H 置零
-            grad_H.setZero();
         }
     }
 
     return VectorXd();
 }
 
-// 内部实际执行迭代的函数（被 solveLeftArmIK 调用）
-Eigen::VectorXd IKSolver::solveIK_Internal(
-    const pinocchio::SE3& T_target,
-    const Eigen::VectorXd& q_init,
-    int max_iters,
-    double eps,
-    int& iters_out)
-{
-    using namespace pinocchio;
-    using namespace Eigen;
-
-    Model& model = pimpl_->model_;
-    Data& data = *pimpl_->data_;
-    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame_);
-    const int n_arm = left_arm_joints_.size();
-
-    // 初始化全量 q 向量
-    VectorXd q = neutral(model);
-    // 将传入的 7 维初值映射到 model 的正确位置
-    for (int i = 0; i < n_arm; ++i) {
-        int qi = model.joints[model.getJointId(left_arm_joints_[i])].idx_q();
-        q[qi] = q_init[i];
-    }
-
-    double lambda = 1e-3; // 阻尼系数
-    const double dt = 0.5; // 步长系数
-    
-    for (int iter = 0; iter < max_iters; ++iter) {
-        iters_out = iter + 1; // 记录当前步数
-
-        // 1. 更新运动学
-        forwardKinematics(model, data, q);
-        updateFramePlacements(model, data);
-
-        // 2. 计算当前位姿误差 (LOCAL 坐标系)
-        SE3 T_current = data.oMf[ee_fid];
-        Motion err_motion = log6(T_current.actInv(T_target));
-        Eigen::VectorXd err = err_motion.toVector();
-
-        // 检查精度
-        if (err.norm() < eps) {
-            VectorXd res(n_arm);
-            for (int i = 0; i < n_arm; ++i)
-                res[i] = q[model.joints[model.getJointId(left_arm_joints_[i])].idx_q()];
-            return res;
-        }
-
-        // 3. 计算雅可比矩阵 (6 x 7)
-        MatrixXd J_full = MatrixXd::Zero(6, model.nv);
-        computeFrameJacobian(model, data, q, ee_fid, LOCAL, J_full);
-        
-        MatrixXd J_arm(6, n_arm);
-        for (int i = 0; i < n_arm; ++i) {
-            int vi = model.joints[model.getJointId(left_arm_joints_[i])].idx_v();
-            J_arm.col(i) = J_full.col(vi);
-        }
-
-        // 4. Levenberg-Marquardt 求解
-        MatrixXd JJt = J_arm * J_arm.transpose();
-        JJt.diagonal().array() += (lambda * lambda);
-        // 使用 QR 分解获得更稳定的逆
-        VectorXd dq = J_arm.transpose() * JJt.colPivHouseholderQr().solve(err);
-
-        // 5. 更新 q 并应用硬限位约束
-        for (int i = 0; i < n_arm; ++i) {
-            int qi = model.joints[model.getJointId(left_arm_joints_[i])].idx_q();
-            q[qi] += dq[i] * dt;
-            
-            // 强制限制在 URDF 定义的范围内
-            q[qi] = std::max(model.lowerPositionLimit[qi], 
-                    std::min(model.upperPositionLimit[qi], q[qi]));
-        }
-
-        // 动态调整阻尼 (简单的启发式)
-        if (err.norm() < 0.1) lambda = 1e-4;
-    }
-
-    return VectorXd(); // 本次尝试失败
-}
 
 
-
-Eigen::VectorXd IKSolver::solveLeftArmIK(
+Eigen::VectorXd IKSolver::solveArmIK(
     const pinocchio::SE3& T_target_in,
+    ArmSide arm_side,
     const Eigen::VectorXd& initial_q,
     int max_iters,
     double eps,
@@ -433,11 +373,6 @@ Eigen::VectorXd IKSolver::solveLeftArmIK(
 {
     int total_iters = 0;
     int current_iters = 0;
-
-    // 1. 转换目标位姿
-    // pinocchio::SE3 T_target = pimpl_->rpyzyxToSE3(
-    //     target_pose[0], target_pose[1], target_pose[2],
-    //     target_pose[3], target_pose[4], target_pose[5]);
 
     // --- 姿态正交化/四元数化 ---
     // 目的：修正 RPY 转换过程中可能产生的微小非正交误差，确保旋转矩阵严格有效
@@ -448,43 +383,21 @@ Eigen::VectorXd IKSolver::solveLeftArmIK(
     T_target.rotation(q_rot.toRotationMatrix()); // 转回旋转矩阵并重新赋值给 T_target
 
     // 2. 准备初始值
-    Eigen::VectorXd q_start = (initial_q.size() == 7) ? initial_q : (getJointLimits().first + getJointLimits().second) / 2.0;
+    auto limits = getArmJointLimits(arm_side);
+    Eigen::VectorXd q_start = (initial_q.size() == 7) ? initial_q : (limits.first + limits.second) / 2.0;
 
-    // 3. 第一次尝试(尝试快速求解 (LDLT/QR))
+    // 3. 第一次尝试(尝试快速求解 (LDLT))
     int first_stage_iters = std::max(max_iters, 200);
-    Eigen::VectorXd result = solveIK_Core(T_target, q_start, first_stage_iters, eps, current_iters, false);
+    Eigen::VectorXd result = solveIK_Core(T_target, q_start, first_stage_iters, eps, current_iters, SolverMethod::LDLT, arm_side);
     total_iters += current_iters;
 
     if (result.size() > 0){
         if (iterations) *iterations = total_iters;
-        stats_.qr_stage_success++; // QR 阶段成功
+        stats_.qr_stage_success++; // LDLT 阶段成功
         return result;
-    } 
-
-    // 4. 【核心改动】如果失败，进行随机多点重启 (Multi-Start)
-    // 7-DOF 很容易陷入局部极小值，随机重启能解决 99% 的失败
-    // int max_restarts = 5;
-    // auto limits = getJointLimits();
-    // std::mt19937 gen(12345); // 固定种子或 std::random_device()
-
-    // for (int r = 0; r < max_restarts; ++r) {
-    //     Eigen::VectorXd random_q(7);
-    //     int retry_iters = 0;
-    //     for (int i = 0; i < 7; ++i) {
-    //         std::uniform_real_distribution<double> dist(limits.first[i], limits.second[i]);
-    //         random_q[i] = dist(gen);
-    //     }
-
-    //     result = solveIK_Internal(T_target, random_q, max_iters, eps, retry_iters);
-    //     current_iters += retry_iters; // 累加尝试步数
-    //     if (result.size() > 0) {
-    //         if (iterations) *iterations = current_iters;
-    //         return result;
-    //     } 
-    // }
+    }
 
     // --- 第二阶段：快速求解失败，尝试 SVD 稳健模式 + 随机重启 ---
-    auto limits = getJointLimits();
     std::mt19937 gen(std::random_device{}()); // 使用真实随机数种子
 
     for (int r = 0; r < 10; ++r) {
@@ -494,7 +407,7 @@ Eigen::VectorXd IKSolver::solveLeftArmIK(
             random_q[i] = dist(gen);
         }
 
-        result = solveIK_Core(T_target, random_q, max_iters, eps, current_iters, true);
+        result = solveIK_Core(T_target, random_q, max_iters, eps, current_iters, SolverMethod::SVD, arm_side);
         total_iters += current_iters;
         
         if (result.size() > 0) {
@@ -508,13 +421,14 @@ Eigen::VectorXd IKSolver::solveLeftArmIK(
     return Eigen::VectorXd(); // 最终失败
 }
 
-PoseRPY IKSolver::computeLeftArmFK(const Eigen::VectorXd& q)
+PoseRPY IKSolver::computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side)
 {
     using namespace pinocchio;
     
     // 获取关节索引
     std::vector<int> q_indices, v_indices;
-    pimpl_->getJointIndices(left_arm_joints_, q_indices, v_indices);
+    const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
+    pimpl_->getJointIndices(arm_joints, q_indices, v_indices);
     
     // 构建完整q向量
     Eigen::VectorXd q_full = neutral(pimpl_->model_);
@@ -527,7 +441,8 @@ PoseRPY IKSolver::computeLeftArmFK(const Eigen::VectorXd& q)
     updateFramePlacements(pimpl_->model_, *pimpl_->data_);
     
     // 获取末端位姿
-    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame_);
+    const std::string& ee_frame = arm_side == ArmSide::LEFT ? left_ee_frame_ : right_ee_frame_;
+    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame);
     SE3 T = pimpl_->data_->oMf[ee_fid];
     
     // 转换为RPY
@@ -551,16 +466,17 @@ PoseRPY IKSolver::computeLeftArmFK(const Eigen::VectorXd& q)
     return pose;
 }
 
-std::pair<Eigen::VectorXd, Eigen::VectorXd> IKSolver::getJointLimits() const {
-    size_t n = left_arm_joints_.size();
+std::pair<Eigen::VectorXd, Eigen::VectorXd> IKSolver::getArmJointLimits(ArmSide arm_side) const {
+    const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
+    size_t n = arm_joints.size();
     Eigen::VectorXd lower(n), upper(n);
     
     for (size_t i = 0; i < n; ++i) {
         // 关键：通过关节名称获取模型中的真实 ID
-        if (!pimpl_->model_.existJointName(left_arm_joints_[i])) {
+        if (!pimpl_->model_.existJointName(arm_joints[i])) {
             continue; 
         }
-        auto jid = pimpl_->model_.getJointId(left_arm_joints_[i]);
+        auto jid = pimpl_->model_.getJointId(arm_joints[i]);
         // 获取该关节在全局 q 向量中的起始索引
         int q_idx = pimpl_->model_.joints[jid].idx_q();
         
@@ -571,14 +487,15 @@ std::pair<Eigen::VectorXd, Eigen::VectorXd> IKSolver::getJointLimits() const {
     return {lower, upper};
 }
 
-PoseSE3 IKSolver::computeLeftArmFK_SE3(const Eigen::VectorXd& q)
+PoseSE3 IKSolver::computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side)
 {
     using namespace pinocchio;
     
     // 1. 将 7 维 q 映射到全量 q_full (处理有腰部或其它关节的情况)
     Eigen::VectorXd q_full = neutral(pimpl_->model_);
-    for (size_t i = 0; i < left_arm_joints_.size(); ++i) {
-        int qi = pimpl_->model_.joints[pimpl_->model_.getJointId(left_arm_joints_[i])].idx_q();
+    const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
+    for (size_t i = 0; i < arm_joints.size(); ++i) {
+        int qi = pimpl_->model_.joints[pimpl_->model_.getJointId(arm_joints[i])].idx_q();
         q_full[qi] = q[i];
     }
 
@@ -587,7 +504,8 @@ PoseSE3 IKSolver::computeLeftArmFK_SE3(const Eigen::VectorXd& q)
     updateFramePlacements(pimpl_->model_, *pimpl_->data_);
     
     // 3. 获取末端 Frame 的 SE3 变换
-    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame_);
+    const std::string& ee_frame = arm_side == ArmSide::LEFT ? left_ee_frame_ : right_ee_frame_;
+    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame);
     SE3 T = pimpl_->data_->oMf[ee_fid];
     
     // 4. 封装结果
@@ -596,6 +514,14 @@ PoseSE3 IKSolver::computeLeftArmFK_SE3(const Eigen::VectorXd& q)
     pose.R = T.rotation();    // 提取旋转矩阵
     
     return pose;
+}
+
+const std::vector<std::string>& IKSolver::getArmJointNames(ArmSide arm_side) const {
+    return arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
+}
+
+size_t IKSolver::getArmJointCount(ArmSide arm_side) const {
+    return arm_side == ArmSide::LEFT ? left_arm_joints_.size() : right_arm_joints_.size();
 }
 
 } // namespace left_arm_ik_test

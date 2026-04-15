@@ -59,8 +59,8 @@ target_include_directories(fa_ik_solver_lib
 add_executable(left_arm_ik_node
   src/left_arm_ik_node.cpp
 )
-add_executable(fa_left_arm_ik_node
-  src/fa_left_arm_ik_node.cpp
+add_executable(fa_arm_kinematic_node
+  src/fa_arm_kinematic_node.cpp
 )
 add_executable(arm_ik_rviz_node
   src/arm_ik_rviz_node.cpp
@@ -72,7 +72,7 @@ ament_target_dependencies(left_arm_ik_node
   Eigen3
   pinocchio
 )
-ament_target_dependencies(fa_left_arm_ik_node
+ament_target_dependencies(fa_arm_kinematic_node
   rclcpp
   Eigen3
   pinocchio
@@ -95,7 +95,7 @@ ament_target_dependencies(arm_ik_rviz_node
 target_link_libraries(left_arm_ik_node
   ik_solver_lib
 )
-target_link_libraries(fa_left_arm_ik_node
+target_link_libraries(fa_arm_kinematic_node
   fa_ik_solver_lib
 )
 target_link_libraries(arm_ik_rviz_node
@@ -108,7 +108,7 @@ install(
     ik_solver_lib
     fa_ik_solver_lib
     left_arm_ik_node
-    fa_left_arm_ik_node
+    fa_arm_kinematic_node
     arm_ik_rviz_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

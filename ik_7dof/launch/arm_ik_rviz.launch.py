@@ -16,11 +16,12 @@ def generate_launch_description():
     # 声明自定义参数
     urdf_file_arg = DeclareLaunchArgument('urdf_file', default_value=os.path.join(pkg_dir, 'urdf', 'fa_robot.urdf'))
     srdf_file_arg = DeclareLaunchArgument('srdf_file', default_value=os.path.join(config_pkg_dir, 'config', 'fa_robot.srdf'))
-    num_tests_arg = DeclareLaunchArgument('num_tests', default_value='5')
+    num_tests_arg = DeclareLaunchArgument('num_tests', default_value='10')
     max_iters_arg = DeclareLaunchArgument('max_iters', default_value='1000')
     eps_arg = DeclareLaunchArgument('eps', default_value='1e-3')
     move_delay_arg = DeclareLaunchArgument('move_delay', default_value='1.0')
     trajectory_duration_arg = DeclareLaunchArgument('trajectory_duration', default_value='2.0')
+    arm_side_arg = DeclareLaunchArgument('arm_side', default_value='left')
 
     # ✨ 核心修复 1：使用 Builder 自动抓取 config 包里的所有 MoveIt 参数（URDF, SRDF, Kinematics等）
     # 注意：这里的 "fa_robot" 是指你的包内部文件前缀，如果不匹配，请填入正确的机器人名称
@@ -55,6 +56,7 @@ def generate_launch_description():
                 'eps': LaunchConfiguration('eps'),
                 'move_delay': LaunchConfiguration('move_delay'),
                 'trajectory_duration': LaunchConfiguration('trajectory_duration'),
+                'arm_side': LaunchConfiguration('arm_side'),
             }
         ]
     )
@@ -67,6 +69,7 @@ def generate_launch_description():
         eps_arg,
         move_delay_arg,
         trajectory_duration_arg,
+        arm_side_arg,
         
         # 启动整个 MoveIt 环境
         demo_launch,
