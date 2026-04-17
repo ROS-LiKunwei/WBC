@@ -206,6 +206,209 @@ ik_7dof/
 [INFO] [fa_arm_kinematic_node]: 失败案例已保存至: fa_left_arm_ik_failed_cases.log
 ```
 
+## FA 机器人正逆运动学使用方法
+
+### 1. 代码中使用 fa_ik_solver
+
+#### 1.1 实例化 IKSolver
+
+```cpp
+#include "ik_7dof/fa_ik_solver.hpp"
+
+// 实例化求解器
+std::string urdf_file = "/path/to/fa_robot.urdf";
+std::string srdf_file = "/path/to/fa_robot.srdf";
+left_arm_ik_test::IKSolver solver(urdf_file, srdf_file);
+```
+
+#### 1.2 正运动学计算
+
+```cpp
+// 定义关节角度（7 个关节）
+Eigen::VectorXd q(7);
+q << 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // 初始化为零位置
+
+// 计算左臂正运动学
+left_arm_ik_test::PoseRPY left_fk = solver.computeArmFK(q, left_arm_ik_test::ArmSide::LEFT);
+std::cout << "左臂末端位姿：" << std::endl;
+std::cout << "位置：x=" << left_fk.x << ", y=" << left_fk.y << ", z=" << left_fk.z << std::endl;
+std::cout << "姿态：roll=" << left_fk.roll << ", pitch=" << left_fk.pitch << ", yaw=" << left_fk.yaw << std::endl;
+
+// 计算右臂正运动学
+left_arm_ik_test::PoseRPY right_fk = solver.computeArmFK(q, left_arm_ik_test::ArmSide::RIGHT);
+std::cout << "右臂末端位姿：" << std::endl;
+std::cout << "位置：x=" << right_fk.x << ", y=" << right_fk.y << ", z=" << right_fk.z << std::endl;
+std::cout << "姿态：roll=" << right_fk.roll << ", pitch=" << right_fk.pitch << ", yaw=" << right_fk.yaw << std::endl;
+```
+
+#### 1.3 逆运动学求解
+
+```cpp
+// 定义目标位姿（使用 Pinocchio SE3 格式）
+pinocchio::SE3 T_target;
+Eigen::Vector3d target_pos(0.5, 0.2, 0.5); // 目标位置
+Eigen::Matrix3d target_rot = pinocchio::SE3::Random().rotation(); // 目标姿态
+T_target.translation(target_pos);
+T_target.rotation(target_rot);
+
+// 求解左臂逆运动学
+Eigen::VectorXd left_q_solved = solver.solveArmIK(T_target, left_arm_ik_test::ArmSide::LEFT);
+if (left_q_solved.size() > 0) {
+    std::cout << "左臂逆运动学求解成功！" << std::endl;
+    std::cout << "关节角度：" << left_q_solved.transpose() << std::endl;
+} else {
+    std::cout << "左臂逆运动学求解失败！" << std::endl;
+}
+
+// 求解右臂逆运动学
+Eigen::VectorXd right_q_solved = solver.solveArmIK(T_target, left_arm_ik_test::ArmSide::RIGHT);
+if (right_q_solved.size() > 0) {
+    std::cout << "右臂逆运动学求解成功！" << std::endl;
+    std::cout << "关节角度：" << right_q_solved.transpose() << std::endl;
+} else {
+    std::cout << "右臂逆运动学求解失败！" << std::endl;
+}
+```
+
+#### 1.4 指定求解器方法（solveArmIK内部自动选择）
+
+```cpp
+// 使用 LDLT 方法（快速）
+Eigen::VectorXd q_solved_ldlt = solver.solveIK_Core(
+    T_target,              // 目标位姿
+    Eigen::VectorXd(),     // 初始关节角度（默认零）
+    100,                   // 最大迭代次数
+    1e-3,                  // 收敛精度
+    iters,                 // 输出实际迭代次数
+    left_arm_ik_test::SolverMethod::LDLT,  // 求解方法
+    left_arm_ik_test::ArmSide::LEFT        // 手臂侧
+);
+
+// 使用 SVD 方法（稳健）
+Eigen::VectorXd q_solved_svd = solver.solveIK_Core(
+    T_target,              // 目标位姿
+    Eigen::VectorXd(),     // 初始关节角度（默认零）
+    100,                   // 最大迭代次数
+    1e-3,                  // 收敛精度
+    iters,                 // 输出实际迭代次数
+    left_arm_ik_test::SolverMethod::SVD,   // 求解方法
+    left_arm_ik_test::ArmSide::LEFT        // 手臂侧
+);
+```
+
+### 2. 获取关节信息
+
+```cpp
+// 获取左臂关节名称
+const auto& left_joint_names = solver.getArmJointNames(left_arm_ik_test::ArmSide::LEFT);
+std::cout << "左臂关节名称：" << std::endl;
+for (const auto& name : left_joint_names) {
+    std::cout << "  " << name << std::endl;
+}
+
+// 获取右臂关节名称
+const auto& right_joint_names = solver.getArmJointNames(left_arm_ik_test::ArmSide::RIGHT);
+std::cout << "右臂关节名称：" << std::endl;
+for (const auto& name : right_joint_names) {
+    std::cout << "  " << name << std::endl;
+}
+
+// 获取关节限位
+auto left_limits = solver.getArmJointLimits(left_arm_ik_test::ArmSide::LEFT);
+std::cout << "左臂关节限位：" << std::endl;
+for (size_t i = 0; i < left_joint_names.size(); ++i) {
+    std::cout << "  " << left_joint_names[i] << ": [" << left_limits.first[i] << ", " << left_limits.second[i] << "]" << std::endl;
+}
+
+auto right_limits = solver.getArmJointLimits(left_arm_ik_test::ArmSide::RIGHT);
+std::cout << "右臂关节限位：" << std::endl;
+for (size_t i = 0; i < right_joint_names.size(); ++i) {
+    std::cout << "  " << right_joint_names[i] << ": [" << right_limits.first[i] << ", " << right_limits.second[i] << "]" << std::endl;
+}
+```
+
+### 3. 集成到 ROS 2 节点
+
+```cpp
+#include <rclcpp/rclcpp.hpp>
+#include "ik_7dof/fa_ik_solver.hpp"
+
+class MyIKNode : public rclcpp::Node
+{
+public:
+    MyIKNode() : Node("my_ik_node")
+    {
+        // 初始化求解器
+        std::string urdf_file = this->declare_parameter<std::string>("urdf_file", "");
+        std::string srdf_file = this->declare_parameter<std::string>("srdf_file", "");
+        solver_ = std::make_unique<left_arm_ik_test::IKSolver>(urdf_file, srdf_file);
+        
+        // 创建定时器，定期执行正逆运动学计算
+        timer_ = this->create_wall_timer(
+            std::chrono::seconds(1),
+            std::bind(&MyIKNode::runIKTest, this)
+        );
+    }
+    
+private:
+    void runIKTest()
+    {
+        // 生成随机关节角度
+        Eigen::VectorXd q(7);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        auto limits = solver_->getArmJointLimits(left_arm_ik_test::ArmSide::LEFT);
+        for (int i = 0; i < 7; ++i) {
+            std::uniform_real_distribution<> dist(limits.first[i], limits.second[i]);
+            q[i] = dist(gen);
+        }
+        
+        // 计算正运动学
+        auto fk_result = solver_->computeArmFK_SE3(q, left_arm_ik_test::ArmSide::LEFT);
+        
+        // 构建目标位姿
+        pinocchio::SE3 T_target;
+        T_target.translation(fk_result.p);
+        T_target.rotation(fk_result.R);
+        
+        // 求解逆运动学
+        int iters = 0;
+        Eigen::VectorXd q_solved = solver_->solveArmIK(
+            T_target, 
+            left_arm_ik_test::ArmSide::LEFT, 
+            Eigen::VectorXd(), 
+            100, 
+            1e-3, 
+            &iters
+        );
+        
+        // 验证结果
+        if (q_solved.size() > 0) {
+            auto fk_verify = solver_->computeArmFK_SE3(q_solved, left_arm_ik_test::ArmSide::LEFT);
+            double pos_error = (fk_result.p - fk_verify.p).norm();
+            Eigen::Matrix3d R_diff = fk_result.R.transpose() * fk_verify.R;
+            Eigen::AngleAxisd angle_diff(R_diff);
+            double rot_error = std::abs(angle_diff.angle());
+            
+            RCLCPP_INFO(this->get_logger(), "正逆解验证成功！位置误差: %.4f, 姿态误差: %.4f", pos_error, rot_error);
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "逆运动学求解失败！");
+        }
+    }
+    
+    std::unique_ptr<left_arm_ik_test::IKSolver> solver_;
+    rclcpp::TimerBase::SharedPtr timer_;
+};
+
+int main(int argc, char* argv[])
+{
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<MyIKNode>());
+    rclcpp::shutdown();
+    return 0;
+}
+```
+
 ## 贡献
 
 欢迎提交问题和建议，帮助我们改进这个项目。
