@@ -12,7 +12,7 @@
 #include <iomanip>
 #include <memory>
 
-namespace left_arm_ik_test
+namespace fa_arm_kinematic
 {
 
 // PIMPL实现
@@ -524,4 +524,4 @@ size_t IKSolver::getArmJointCount(ArmSide arm_side) const {
     return arm_side == ArmSide::LEFT ? left_arm_joints_.size() : right_arm_joints_.size();
 }
 
-} // namespace left_arm_ik_test
+} // namespace fa_arm_kinematic

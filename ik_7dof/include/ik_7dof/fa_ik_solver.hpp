@@ -1,5 +1,5 @@
-#ifndef LEFT_ARM_IK_TEST__FA_IK_SOLVER_HPP_
-#define LEFT_ARM_IK_TEST__FA_IK_SOLVER_HPP_
+#ifndef FA_ARM_KINEMATIC__FA_IK_SOLVER_HPP_
+#define FA_ARM_KINEMATIC__FA_IK_SOLVER_HPP_
 
 #include <string>
 #include <vector>
@@ -8,7 +8,7 @@
 #include <Eigen/Dense>
 #include <pinocchio/spatial/se3.hpp>
 
-namespace left_arm_ik_test
+namespace fa_arm_kinematic
 {
 
 struct PoseRPY
@@ -114,6 +114,6 @@ private:
     std::string srdf_file_;
 };
 
-} // namespace left_arm_ik_test
+} // namespace fa_arm_kinematic
 
-#endif // LEFT_ARM_IK_TEST__FA_IK_SOLVER_HPP_
+#endif // FA_ARM_KINEMATIC__FA_IK_SOLVER_HPP_

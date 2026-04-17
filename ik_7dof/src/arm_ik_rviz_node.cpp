@@ -16,7 +16,7 @@
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-using namespace left_arm_ik_test;
+using namespace fa_arm_kinematic;
 
 class ArmIKRvizNode : public rclcpp::Node
 {

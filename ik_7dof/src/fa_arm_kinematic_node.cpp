@@ -7,7 +7,7 @@
 #include <memory>
 #include <fstream>
 #include <chrono>
-using namespace left_arm_ik_test;
+using namespace fa_arm_kinematic;
 
 class FaArmKinematicNode : public rclcpp::Node
 {

@@ -218,7 +218,7 @@ ik_7dof/
 // 实例化求解器
 std::string urdf_file = "/path/to/fa_robot.urdf";
 std::string srdf_file = "/path/to/fa_robot.srdf";
-left_arm_ik_test::IKSolver solver(urdf_file, srdf_file);
+fa_arm_kinematic::IKSolver solver(urdf_file, srdf_file);
 ```
 
 #### 1.2 正运动学计算
@@ -229,13 +229,13 @@ Eigen::VectorXd q(7);
 q << 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // 初始化为零位置
 
 // 计算左臂正运动学
-left_arm_ik_test::PoseRPY left_fk = solver.computeArmFK(q, left_arm_ik_test::ArmSide::LEFT);
+fa_arm_kinematic::PoseRPY left_fk = solver.computeArmFK(q, fa_arm_kinematic::ArmSide::LEFT);
 std::cout << "左臂末端位姿：" << std::endl;
 std::cout << "位置：x=" << left_fk.x << ", y=" << left_fk.y << ", z=" << left_fk.z << std::endl;
 std::cout << "姿态：roll=" << left_fk.roll << ", pitch=" << left_fk.pitch << ", yaw=" << left_fk.yaw << std::endl;
 
 // 计算右臂正运动学
-left_arm_ik_test::PoseRPY right_fk = solver.computeArmFK(q, left_arm_ik_test::ArmSide::RIGHT);
+fa_arm_kinematic::PoseRPY right_fk = solver.computeArmFK(q, fa_arm_kinematic::ArmSide::RIGHT);
 std::cout << "右臂末端位姿：" << std::endl;
 std::cout << "位置：x=" << right_fk.x << ", y=" << right_fk.y << ", z=" << right_fk.z << std::endl;
 std::cout << "姿态：roll=" << right_fk.roll << ", pitch=" << right_fk.pitch << ", yaw=" << right_fk.yaw << std::endl;
@@ -252,7 +252,7 @@ T_target.translation(target_pos);
 T_target.rotation(target_rot);
 
 // 求解左臂逆运动学
-Eigen::VectorXd left_q_solved = solver.solveArmIK(T_target, left_arm_ik_test::ArmSide::LEFT);
+Eigen::VectorXd left_q_solved = solver.solveArmIK(T_target, fa_arm_kinematic::ArmSide::LEFT);
 if (left_q_solved.size() > 0) {
     std::cout << "左臂逆运动学求解成功！" << std::endl;
     std::cout << "关节角度：" << left_q_solved.transpose() << std::endl;
@@ -261,7 +261,7 @@ if (left_q_solved.size() > 0) {
 }
 
 // 求解右臂逆运动学
-Eigen::VectorXd right_q_solved = solver.solveArmIK(T_target, left_arm_ik_test::ArmSide::RIGHT);
+Eigen::VectorXd right_q_solved = solver.solveArmIK(T_target, fa_arm_kinematic::ArmSide::RIGHT);
 if (right_q_solved.size() > 0) {
     std::cout << "右臂逆运动学求解成功！" << std::endl;
     std::cout << "关节角度：" << right_q_solved.transpose() << std::endl;
@@ -280,8 +280,8 @@ Eigen::VectorXd q_solved_ldlt = solver.solveIK_Core(
     100,                   // 最大迭代次数
     1e-3,                  // 收敛精度
     iters,                 // 输出实际迭代次数
-    left_arm_ik_test::SolverMethod::LDLT,  // 求解方法
-    left_arm_ik_test::ArmSide::LEFT        // 手臂侧
+    fa_arm_kinematic::SolverMethod::LDLT,  // 求解方法
+    fa_arm_kinematic::ArmSide::LEFT        // 手臂侧
 );
 
 // 使用 SVD 方法（稳健）
@@ -291,8 +291,8 @@ Eigen::VectorXd q_solved_svd = solver.solveIK_Core(
     100,                   // 最大迭代次数
     1e-3,                  // 收敛精度
     iters,                 // 输出实际迭代次数
-    left_arm_ik_test::SolverMethod::SVD,   // 求解方法
-    left_arm_ik_test::ArmSide::LEFT        // 手臂侧
+    fa_arm_kinematic::SolverMethod::SVD,   // 求解方法
+    fa_arm_kinematic::ArmSide::LEFT        // 手臂侧
 );
 ```
 
@@ -300,27 +300,27 @@ Eigen::VectorXd q_solved_svd = solver.solveIK_Core(
 
 ```cpp
 // 获取左臂关节名称
-const auto& left_joint_names = solver.getArmJointNames(left_arm_ik_test::ArmSide::LEFT);
+const auto& left_joint_names = solver.getArmJointNames(fa_arm_kinematic::ArmSide::LEFT);
 std::cout << "左臂关节名称：" << std::endl;
 for (const auto& name : left_joint_names) {
     std::cout << "  " << name << std::endl;
 }
 
 // 获取右臂关节名称
-const auto& right_joint_names = solver.getArmJointNames(left_arm_ik_test::ArmSide::RIGHT);
+const auto& right_joint_names = solver.getArmJointNames(fa_arm_kinematic::ArmSide::RIGHT);
 std::cout << "右臂关节名称：" << std::endl;
 for (const auto& name : right_joint_names) {
     std::cout << "  " << name << std::endl;
 }
 
 // 获取关节限位
-auto left_limits = solver.getArmJointLimits(left_arm_ik_test::ArmSide::LEFT);
+auto left_limits = solver.getArmJointLimits(fa_arm_kinematic::ArmSide::LEFT);
 std::cout << "左臂关节限位：" << std::endl;
 for (size_t i = 0; i < left_joint_names.size(); ++i) {
     std::cout << "  " << left_joint_names[i] << ": [" << left_limits.first[i] << ", " << left_limits.second[i] << "]" << std::endl;
 }
 
-auto right_limits = solver.getArmJointLimits(left_arm_ik_test::ArmSide::RIGHT);
+auto right_limits = solver.getArmJointLimits(fa_arm_kinematic::ArmSide::RIGHT);
 std::cout << "右臂关节限位：" << std::endl;
 for (size_t i = 0; i < right_joint_names.size(); ++i) {
     std::cout << "  " << right_joint_names[i] << ": [" << right_limits.first[i] << ", " << right_limits.second[i] << "]" << std::endl;
@@ -341,7 +341,7 @@ public:
         // 初始化求解器
         std::string urdf_file = this->declare_parameter<std::string>("urdf_file", "");
         std::string srdf_file = this->declare_parameter<std::string>("srdf_file", "");
-        solver_ = std::make_unique<left_arm_ik_test::IKSolver>(urdf_file, srdf_file);
+        solver_ = std::make_unique<fa_arm_kinematic::IKSolver>(urdf_file, srdf_file);
         
         // 创建定时器，定期执行正逆运动学计算
         timer_ = this->create_wall_timer(
@@ -357,14 +357,14 @@ private:
         Eigen::VectorXd q(7);
         std::random_device rd;
         std::mt19937 gen(rd());
-        auto limits = solver_->getArmJointLimits(left_arm_ik_test::ArmSide::LEFT);
+        auto limits = solver_->getArmJointLimits(fa_arm_kinematic::ArmSide::LEFT);
         for (int i = 0; i < 7; ++i) {
             std::uniform_real_distribution<> dist(limits.first[i], limits.second[i]);
             q[i] = dist(gen);
         }
         
         // 计算正运动学
-        auto fk_result = solver_->computeArmFK_SE3(q, left_arm_ik_test::ArmSide::LEFT);
+        auto fk_result = solver_->computeArmFK_SE3(q, fa_arm_kinematic::ArmSide::LEFT);
         
         // 构建目标位姿
         pinocchio::SE3 T_target;
@@ -375,7 +375,7 @@ private:
         int iters = 0;
         Eigen::VectorXd q_solved = solver_->solveArmIK(
             T_target, 
-            left_arm_ik_test::ArmSide::LEFT, 
+            fa_arm_kinematic::ArmSide::LEFT, 
             Eigen::VectorXd(), 
             100, 
             1e-3, 
@@ -384,7 +384,7 @@ private:
         
         // 验证结果
         if (q_solved.size() > 0) {
-            auto fk_verify = solver_->computeArmFK_SE3(q_solved, left_arm_ik_test::ArmSide::LEFT);
+            auto fk_verify = solver_->computeArmFK_SE3(q_solved, fa_arm_kinematic::ArmSide::LEFT);
             double pos_error = (fk_result.p - fk_verify.p).norm();
             Eigen::Matrix3d R_diff = fk_result.R.transpose() * fk_verify.R;
             Eigen::AngleAxisd angle_diff(R_diff);
@@ -396,7 +396,7 @@ private:
         }
     }
     
-    std::unique_ptr<left_arm_ik_test::IKSolver> solver_;
+    std::unique_ptr<fa_arm_kinematic::IKSolver> solver_;
     rclcpp::TimerBase::SharedPtr timer_;
 };
 

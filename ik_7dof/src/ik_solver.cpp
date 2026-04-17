@@ -11,7 +11,7 @@
 #include <fstream>
 #include <memory>
 
-namespace left_arm_ik_test
+namespace fa_arm_kinematic
 {
 
 // PIMPL实现
@@ -574,4 +574,4 @@ PoseSE3 IKSolver::computeLeftArmFK_SE3(const Eigen::VectorXd& q)
     return pose;
 }
 
-} // namespace left_arm_ik_test
+} // namespace fa_arm_kinematic
