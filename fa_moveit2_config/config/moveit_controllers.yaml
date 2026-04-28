@@ -1,8 +1,12 @@
+# MoveIt uses this configuration for controller management
+
 moveit_simple_controller_manager:
   controller_names:
     - leftArm_controller
     - rightArm_controller
     - body_controller
+    - leftLeg_controller
+    - rightLeg_controller
 
   leftArm_controller:
     type: FollowJointTrajectory
@@ -38,3 +42,27 @@ moveit_simple_controller_manager:
       - waist_yaw_joint
       - waist_roll_joint
       - waist_pitch_joint
+      
+  leftLeg_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory  # ✨ 必须添加这一行
+    default: True
+    joints:
+      - left_hip_pitch_joint
+      - left_hip_roll_joint
+      - left_hip_yaw_joint
+      - left_knee_joint
+      - left_ankle_pitch_joint
+      - left_ankle_roll_joint
+
+  rightLeg_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory  # ✨ 必须添加这一行
+    default: True
+    joints:
+      - right_hip_pitch_joint
+      - right_hip_roll_joint
+      - right_hip_yaw_joint
+      - right_knee_joint
+      - right_ankle_pitch_joint
+      - right_ankle_roll_joint

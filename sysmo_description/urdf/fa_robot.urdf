@@ -860,7 +860,7 @@
     </collision>
   </link>
   <joint
-    name="left_thumb_cmc_yaw"
+    name="left_thumb_cmc_yaw_joint"
     type="revolute">
     <origin
       xyz="0.011508 -0.022975 0.032794"
@@ -918,7 +918,7 @@
     </collision>
   </link>
   <joint
-    name="left_thumb_cmc_pitch"
+    name="left_thumb_cmc_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0061649 -0.010678 -0.004891"
@@ -976,7 +976,7 @@
     </collision>
   </link>
   <joint
-    name="left_thumb_ip"
+    name="left_thumb_ip_joint"
     type="revolute">
     <origin
       xyz="0.0037776 0 0.045368"
@@ -993,7 +993,7 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="left_thumb_cmc_pitch"
+      joint="left_thumb_cmc_pitch_joint"
       multiplier="1.86"
       offset="0" />
   </joint>
@@ -1038,7 +1038,7 @@
     </collision>
   </link>
   <joint
-    name="left_index_mcp_pitch"
+    name="left_index_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0024758 -0.02419 0.098779"
@@ -1096,7 +1096,7 @@
     </collision>
   </link>
   <joint
-    name="left_index_dip"
+    name="left_index_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
@@ -1113,7 +1113,7 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="left_index_mcp_pitch"
+      joint="left_index_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
@@ -1158,7 +1158,7 @@
     </collision>
   </link>
   <joint
-    name="left_middle_mcp_pitch"
+    name="left_middle_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.00052576 -0.00634 0.1027"
@@ -1216,7 +1216,7 @@
     </collision>
   </link>
   <joint
-    name="left_middle_dip"
+    name="left_middle_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
@@ -1233,7 +1233,7 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="left_middle_mcp_pitch"
+      joint="left_middle_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
@@ -1278,7 +1278,7 @@
     </collision>
   </link>
   <joint
-    name="left_ring_mcp_pitch"
+    name="left_ring_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0010258 0.011135 0.098767"
@@ -1336,7 +1336,7 @@
     </collision>
   </link>
   <joint
-    name="left_ring_dip"
+    name="left_ring_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
@@ -1353,7 +1353,7 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="left_ring_mcp_pitch"
+      joint="left_ring_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
@@ -1398,7 +1398,7 @@
     </collision>
   </link>
   <joint
-    name="left_pinky_mcp_pitch"
+    name="left_pinky_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0024758 0.028372 0.092741"
@@ -1414,7 +1414,6 @@
       upper="1.60"
       effort="100"
       velocity="1" />
-
   </joint>
   <link
     name="left_pinky_distal">
@@ -1457,7 +1456,7 @@
     </collision>
   </link>
   <joint
-    name="left_pinky_dip"
+    name="left_pinky_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
@@ -1474,7 +1473,7 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="left_pinky_mcp_pitch"
+      joint="left_pinky_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
@@ -1695,7 +1694,7 @@
     <limit lower="-1.57" upper="1.57" effort="0" velocity="0" />
   </joint>
   <link
-    name="hand_base_link">
+    name="right_hand_base_link">
     <inertial>
       <origin
         xyz="-0.00160320773490556 0.000358462699237561 0.0538002704027215"
@@ -1716,7 +1715,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/hand_base_link.STL" />
+          filename="package://sysmo_description/meshes/right_hand_base_link.STL" />
       </geometry>
       <material
         name="">
@@ -1730,7 +1729,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/hand_base_link.STL" />
+          filename="package://sysmo_description/meshes/right_hand_base_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1743,10 +1742,10 @@
     <parent
       link="right_wrist_roll_link" />
     <child
-      link="hand_base_link" />
+      link="right_hand_base_link" />
   </joint>
   <link
-    name="thumb_metacarpals_base2">
+    name="right_thumb_metacarpals_base2">
     <inertial>
       <origin
         xyz="0.00162795738393507 0.00276671978336815 -0.00184227725602707"
@@ -1767,7 +1766,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/thumb_metacarpals_base2.STL" />
+          filename="package://sysmo_description/meshes/right_thumb_metacarpals_base2.STL" />
       </geometry>
       <material
         name="">
@@ -1781,20 +1780,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/thumb_metacarpals_base2.STL" />
+          filename="package://sysmo_description/meshes/right_thumb_metacarpals_base2.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="thumb_cmc_yaw"
+    name="right_thumb_cmc_yaw_joint"
     type="revolute">
     <origin
       xyz="0.011508 0.022975 0.032794"
       rpy="0 0 0" />
     <parent
-      link="hand_base_link" />
+      link="right_hand_base_link" />
     <child
-      link="thumb_metacarpals_base2" />
+      link="right_thumb_metacarpals_base2" />
     <axis
       xyz="0 0 -1" />
     <limit
@@ -1804,7 +1803,7 @@
       velocity="1" />
   </joint>
   <link
-    name="thumb_metacarpals">
+    name="right_thumb_metacarpals">
     <inertial>
       <origin
         xyz="4.24920612856275E-05 -1.67885666835232E-05 0.0228341522590467"
@@ -1825,7 +1824,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/thumb_metacarpals.STL" />
+          filename="package://sysmo_description/meshes/right_thumb_metacarpals.STL" />
       </geometry>
       <material
         name="">
@@ -1839,20 +1838,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/thumb_metacarpals.STL" />
+          filename="package://sysmo_description/meshes/right_thumb_metacarpals.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="thumb_cmc_pitch"
+    name="right_thumb_cmc_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0061649 0.010678 -0.004891"
       rpy="0 -1.1529 -2.0944" />
     <parent
-      link="thumb_metacarpals_base2" />
+      link="right_thumb_metacarpals_base2" />
     <child
-      link="thumb_metacarpals" />
+      link="right_thumb_metacarpals" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -1862,7 +1861,7 @@
       velocity="1" />
   </joint>
   <link
-    name="thumb_distal">
+    name="right_thumb_distal">
     <inertial>
       <origin
         xyz="-0.00413690727496815 -4.54842793429222E-07 0.0230097179163771"
@@ -1883,7 +1882,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/thumb_distal.STL" />
+          filename="package://sysmo_description/meshes/right_thumb_distal.STL" />
       </geometry>
       <material
         name="">
@@ -1897,20 +1896,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/thumb_distal.STL" />
+          filename="package://sysmo_description/meshes/right_thumb_distal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="thumb_ip"
+    name="right_thumb_ip_joint"
     type="revolute">
     <origin
       xyz="0.0037776 0 0.045368"
       rpy="0 0 0" />
     <parent
-      link="thumb_metacarpals" />
+      link="right_thumb_metacarpals" />
     <child
-      link="thumb_distal" />
+      link="right_thumb_distal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -1919,12 +1918,12 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="thumb_cmc_pitch"
+      joint="right_thumb_cmc_pitch_joint"
       multiplier="1.86"
       offset="0" />
   </joint>
   <link
-    name="index_proximal">
+    name="right_index_proximal">
     <inertial>
       <origin
         xyz="-0.00208665596033792 -4.8964990644329E-06 0.0172736718900068"
@@ -1945,7 +1944,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/index_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_index_proximal.STL" />
       </geometry>
       <material
         name="">
@@ -1959,20 +1958,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/index_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_index_proximal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="index_mcp_pitch"
+    name="right_index_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0024758 0.02419 0.098779"
       rpy="-0.05236 0 0" />
     <parent
-      link="hand_base_link" />
+      link="right_hand_base_link" />
     <child
-      link="index_proximal" />
+      link="right_index_proximal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -1982,7 +1981,7 @@
       velocity="1" />
   </joint>
   <link
-    name="index_distal">
+    name="right_index_distal">
     <inertial>
       <origin
         xyz="0.00658940011630532 -4.59976557022623E-06 0.0194434136420913"
@@ -2003,7 +2002,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/index_distal.STL" />
+          filename="package://sysmo_description/meshes/right_index_distal.STL" />
       </geometry>
       <material
         name="">
@@ -2017,20 +2016,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/index_distal.STL" />
+          filename="package://sysmo_description/meshes/right_index_distal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="index_dip"
+    name="right_index_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
       rpy="0 0 0" />
     <parent
-      link="index_proximal" />
+      link="right_index_proximal" />
     <child
-      link="index_distal" />
+      link="right_index_distal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2039,12 +2038,12 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="index_mcp_pitch"
+      joint="right_index_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
   <link
-    name="middle_proximal">
+    name="right_middle_proximal">
     <inertial>
       <origin
         xyz="-0.00208661081773556 -4.93451838476378E-06 0.0172736805321904"
@@ -2065,7 +2064,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/middle_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_middle_proximal.STL" />
       </geometry>
       <material
         name="">
@@ -2079,20 +2078,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/middle_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_middle_proximal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="middle_mcp_pitch"
+    name="right_middle_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.00052576 0.00634 0.1027"
       rpy="0 0 0" />
     <parent
-      link="hand_base_link" />
+      link="right_hand_base_link" />
     <child
-      link="middle_proximal" />
+      link="right_middle_proximal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2102,7 +2101,7 @@
       velocity="1" />
   </joint>
   <link
-    name="middle_distal">
+    name="right_middle_distal">
     <inertial>
       <origin
         xyz="0.00658940304809306 -4.5885743593238E-06 0.0194434523296449"
@@ -2123,7 +2122,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/middle_distal.STL" />
+          filename="package://sysmo_description/meshes/right_middle_distal.STL" />
       </geometry>
       <material
         name="">
@@ -2137,20 +2136,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/middle_distal.STL" />
+          filename="package://sysmo_description/meshes/right_middle_distal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="middle_dip"
+    name="right_middle_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
       rpy="0 0 0" />
     <parent
-      link="middle_proximal" />
+      link="right_middle_proximal" />
     <child
-      link="middle_distal" />
+      link="right_middle_distal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2159,12 +2158,12 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="middle_mcp_pitch"
+      joint="right_middle_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
   <link
-    name="ring_proximal">
+    name="right_ring_proximal">
     <inertial>
       <origin
         xyz="-0.00208654311325356 -4.98538564003281E-06 0.0172736743497407"
@@ -2185,7 +2184,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/ring_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_ring_proximal.STL" />
       </geometry>
       <material
         name="">
@@ -2199,20 +2198,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/ring_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_ring_proximal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="ring_mcp_pitch"
+    name="right_ring_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0010258 -0.011135 0.098767"
       rpy="0.05236 0 0" />
     <parent
-      link="hand_base_link" />
+      link="right_hand_base_link" />
     <child
-      link="ring_proximal" />
+      link="right_ring_proximal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2222,7 +2221,7 @@
       velocity="1" />
   </joint>
   <link
-    name="ring_distal">
+    name="right_ring_distal">
     <inertial>
       <origin
         xyz="0.00658940273069729 -4.56628863591824E-06 0.0194435005686854"
@@ -2243,7 +2242,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/ring_distal.STL" />
+          filename="package://sysmo_description/meshes/right_ring_distal.STL" />
       </geometry>
       <material
         name="">
@@ -2257,20 +2256,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/ring_distal.STL" />
+          filename="package://sysmo_description/meshes/right_ring_distal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="ring_dip"
+    name="right_ring_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
       rpy="0 0 0" />
     <parent
-      link="ring_proximal" />
+      link="right_ring_proximal" />
     <child
-      link="ring_distal" />
+      link="right_ring_distal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2279,12 +2278,12 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="ring_mcp_pitch"
+      joint="right_ring_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>
   <link
-    name="pinky_proximal">
+    name="right_pinky_proximal">
     <inertial>
       <origin
         xyz="-0.00208649034130813 -5.02314582560837E-06 0.0172736680793697"
@@ -2305,7 +2304,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/pinky_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_pinky_proximal.STL" />
       </geometry>
       <material
         name="">
@@ -2319,20 +2318,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/pinky_proximal.STL" />
+          filename="package://sysmo_description/meshes/right_pinky_proximal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="pinky_mcp_pitch"
+    name="right_pinky_mcp_pitch_joint"
     type="revolute">
     <origin
       xyz="0.0024758 -0.028372 0.092741"
       rpy="0.087266 0 0" />
     <parent
-      link="hand_base_link" />
+      link="right_hand_base_link" />
     <child
-      link="pinky_proximal" />
+      link="right_pinky_proximal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2342,7 +2341,7 @@
       velocity="1" />
   </joint>
   <link
-    name="pinky_distal">
+    name="right_pinky_distal">
     <inertial>
       <origin
         xyz="0.00658940431519205 -4.55268314210333E-06 0.0194435341098305"
@@ -2363,7 +2362,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/pinky_distal.STL" />
+          filename="package://sysmo_description/meshes/right_pinky_distal.STL" />
       </geometry>
       <material
         name="">
@@ -2377,20 +2376,20 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://sysmo_description/meshes/pinky_distal.STL" />
+          filename="package://sysmo_description/meshes/right_pinky_distal.STL" />
       </geometry>
     </collision>
   </link>
   <joint
-    name="pinky_dip"
+    name="right_pinky_dip_joint"
     type="revolute">
     <origin
       xyz="-0.0052516 0 0.036625"
       rpy="0 0 0" />
     <parent
-      link="pinky_proximal" />
+      link="right_pinky_proximal" />
     <child
-      link="pinky_distal" />
+      link="right_pinky_distal" />
     <axis
       xyz="0 1 0" />
     <limit
@@ -2399,7 +2398,7 @@
       effort="100"
       velocity="1" />
     <mimic
-      joint="pinky_mcp_pitch"
+      joint="right_pinky_mcp_pitch_joint"
       multiplier="0.89"
       offset="0" />
   </joint>

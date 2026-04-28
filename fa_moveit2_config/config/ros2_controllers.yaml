@@ -15,6 +15,14 @@ controller_manager:
       type: joint_trajectory_controller/JointTrajectoryController
 
 
+    leftLeg_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    rightLeg_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -54,6 +62,34 @@ body_controller:
       - waist_yaw_joint
       - waist_roll_joint
       - waist_pitch_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+leftLeg_controller:
+  ros__parameters:
+    joints:
+      - left_hip_pitch_joint
+      - left_hip_roll_joint
+      - left_hip_yaw_joint
+      - left_knee_joint
+      - left_ankle_pitch_joint
+      - left_ankle_roll_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+rightLeg_controller:
+  ros__parameters:
+    joints:
+      - right_hip_pitch_joint
+      - right_hip_roll_joint
+      - right_hip_yaw_joint
+      - right_knee_joint
+      - right_ankle_pitch_joint
+      - right_ankle_roll_joint
     command_interfaces:
       - position
     state_interfaces:

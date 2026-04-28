@@ -108,7 +108,7 @@ private:
     // fa_robot 左手末端 frame
     const std::string left_ee_frame_ = "left_hand_base_link";
     // fa_robot 右手末端 frame
-    const std::string right_ee_frame_ = "hand_base_link";
+    const std::string right_ee_frame_ = "right_hand_base_link";
 
     std::string urdf_file_;
     std::string srdf_file_;

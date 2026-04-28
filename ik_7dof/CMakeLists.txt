@@ -25,29 +25,19 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
 # 2. 创建库 (IK 解算器)
-add_library(ik_solver_lib
-  src/ik_solver.cpp
-)
+
 add_library(fa_ik_solver_lib
   src/fa_ik_solver.cpp
 )
 
 # 使用 ament 的方式处理依赖，这会自动处理头文件和库
-ament_target_dependencies(ik_solver_lib
-  Eigen3
-  pinocchio
-)
+
 ament_target_dependencies(fa_ik_solver_lib
   Eigen3
   pinocchio
 )
 
-target_include_directories(ik_solver_lib
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-    ${EIGEN3_INCLUDE_DIRS}
-)
+
 target_include_directories(fa_ik_solver_lib
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -56,9 +46,6 @@ target_include_directories(fa_ik_solver_lib
 )
 
 # 3. 创建可执行文件 (ROS 2 节点)
-add_executable(left_arm_ik_node
-  src/left_arm_ik_node.cpp
-)
 add_executable(fa_arm_kinematic_node
   src/fa_arm_kinematic_node.cpp
 )
@@ -67,11 +54,7 @@ add_executable(arm_ik_rviz_node
 )
 
 # 让节点链接到库并获取所有 ROS 2 依赖环境
-ament_target_dependencies(left_arm_ik_node
-  rclcpp
-  Eigen3
-  pinocchio
-)
+
 ament_target_dependencies(fa_arm_kinematic_node
   rclcpp
   Eigen3
@@ -92,9 +75,6 @@ ament_target_dependencies(arm_ik_rviz_node
 )
 
 # 链接你自己的库
-target_link_libraries(left_arm_ik_node
-  ik_solver_lib
-)
 target_link_libraries(fa_arm_kinematic_node
   fa_ik_solver_lib
 )
@@ -105,9 +85,7 @@ target_link_libraries(arm_ik_rviz_node
 # 4. 安装
 install(
   TARGETS
-    ik_solver_lib
     fa_ik_solver_lib
-    left_arm_ik_node
     fa_arm_kinematic_node
     arm_ik_rviz_node
   ARCHIVE DESTINATION lib
