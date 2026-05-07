@@ -27,6 +27,12 @@ def generate_launch_description():
         default_value='left',
         description='Arm side: left or right'
     )
+
+    reference_frame_arg = DeclareLaunchArgument(
+        'reference_frame',
+        default_value='pelvis',
+        description='Reference frame: pelvis or arm_base'
+    )
     
     num_tests_arg = DeclareLaunchArgument(
         'num_tests',
@@ -56,6 +62,7 @@ def generate_launch_description():
             'urdf_file': LaunchConfiguration('urdf_file'),
             'srdf_file': LaunchConfiguration('srdf_file'),
             'arm_side': LaunchConfiguration('arm_side'),
+            'reference_frame': LaunchConfiguration('reference_frame'),
             'num_tests': LaunchConfiguration('num_tests'),
             'max_iters': LaunchConfiguration('max_iters'),
             'eps': LaunchConfiguration('eps'),
@@ -66,6 +73,7 @@ def generate_launch_description():
         urdf_file_arg,
         srdf_file_arg,
         arm_side_arg,
+        reference_frame_arg,
         num_tests_arg,
         max_iters_arg,
         eps_arg,

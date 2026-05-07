@@ -22,6 +22,15 @@ struct PoseSE3 {
     Eigen::Matrix3d R;
 };
 
+enum class ArmReferenceFrame {
+    ARM_BASE,
+    PELVIS
+};
+
+struct ArmKinematicsOptions {
+    ArmReferenceFrame reference_frame = ArmReferenceFrame::PELVIS;
+};
+
 enum class ArmSide {
     LEFT,
     RIGHT
@@ -38,7 +47,8 @@ public:
     IKSolver(const std::string& urdf_file, const std::string& srdf_file = "");
     ~IKSolver();
 
-    PoseSE3 computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side);
+    PoseSE3 computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side,
+                             const ArmKinematicsOptions& options = ArmKinematicsOptions{});
 
     Eigen::VectorXd solveIK_Core(
         const pinocchio::SE3& T_target,
@@ -47,7 +57,8 @@ public:
         double eps,
         int& iters_out,
         SolverMethod method,
-        ArmSide arm_side = ArmSide::LEFT);
+        ArmSide arm_side = ArmSide::LEFT,
+        const ArmKinematicsOptions& options = ArmKinematicsOptions{});
 
     Eigen::VectorXd solveArmIK(
         const pinocchio::SE3& T_target_in,
@@ -55,9 +66,11 @@ public:
         const Eigen::VectorXd& initial_q = Eigen::VectorXd(),
         int max_iters = 100,
         double eps = 1e-3,
-        int* iterations = nullptr);
+        int* iterations = nullptr,
+        const ArmKinematicsOptions& options = ArmKinematicsOptions{});
 
-    PoseRPY computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side);
+    PoseRPY computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side,
+                         const ArmKinematicsOptions& options = ArmKinematicsOptions{});
 
     const std::vector<std::string>& getArmJointNames(ArmSide arm_side) const;
     size_t getArmJointCount(ArmSide arm_side) const;
@@ -109,6 +122,14 @@ private:
     const std::string left_ee_frame_ = "left_hand_base_link";
     // fa_robot 右手末端 frame
     const std::string right_ee_frame_ = "right_hand_base_link";
+    const std::string pelvis_frame_ = "pelvis";
+    const std::string left_arm_base_frame_ = "waist_pitch_link";
+    const std::string right_arm_base_frame_ = "waist_pitch_link";
+    const std::vector<std::string> waist_joints_ = {
+        "waist_yaw_joint",
+        "waist_roll_joint",
+        "waist_pitch_joint"
+    };
 
     std::string urdf_file_;
     std::string srdf_file_;

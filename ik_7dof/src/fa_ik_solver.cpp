@@ -20,8 +20,18 @@ namespace fa_arm_kinematic
 class IKSolver::Impl
 {
 public:
-    Impl(const std::string& urdf_file, const std::string& srdf_file)
-        : urdf_file_(urdf_file), srdf_file_(srdf_file)
+    Impl(const std::string& urdf_file,
+         const std::string& srdf_file,
+         const std::string& pelvis_frame,
+         const std::string& left_arm_base_frame,
+         const std::string& right_arm_base_frame,
+         const std::vector<std::string>& waist_joint_names)
+        : urdf_file_(urdf_file),
+          srdf_file_(srdf_file),
+          pelvis_frame_(pelvis_frame),
+          left_arm_base_frame_(left_arm_base_frame),
+          right_arm_base_frame_(right_arm_base_frame),
+          waist_joint_names_(waist_joint_names)
     {
         // 加载URDF模型
         // buildModel()解析URDF文件，构建运动学树
@@ -35,6 +45,12 @@ public:
         // 3. 创建数据对象
         // Data存储计算过程中的中间结果
         data_ = std::make_unique<pinocchio::Data>(model_);
+
+        pelvis_fid_ = getFrameId(pelvis_frame_);
+        left_arm_base_fid_ = getFrameId(left_arm_base_frame_);
+        right_arm_base_fid_ = getFrameId(right_arm_base_frame_);
+        pelvis_M_left_arm_base_ = computePelvisToFrame(left_arm_base_fid_);
+        pelvis_M_right_arm_base_ = computePelvisToFrame(right_arm_base_fid_);
         
         std::cout << "模型加载成功!" << std::endl;
         std::cout << "  关节数量: " << model_.nq << std::endl;
@@ -61,6 +77,50 @@ public:
         }
         throw std::runtime_error("Frame not found: " + ee_frame);
     }
+
+    pinocchio::FrameIndex getFrameId(const std::string& frame) const
+    {
+        if (model_.existFrame(frame)) {
+            return model_.getFrameId(frame);
+        }
+        throw std::runtime_error("Frame not found: " + frame);
+    }
+
+    void setJointsToZero(Eigen::VectorXd& q_full, const std::vector<std::string>& joint_names) const
+    {
+        for (const auto& jname : joint_names) {
+            if (!model_.existJointName(jname)) {
+                continue;
+            }
+            auto jid = model_.getJointId(jname);
+            int q_idx = model_.joints[jid].idx_q();
+            q_full[q_idx] = 0.0;
+        }
+    }
+
+    void setWaistJointsToZero(Eigen::VectorXd& q_full) const
+    {
+        setJointsToZero(q_full, waist_joint_names_);
+    }
+
+    pinocchio::SE3 computePelvisToFrame(pinocchio::FrameIndex fid)
+    {
+        Eigen::VectorXd q_full = pinocchio::neutral(model_);
+        setWaistJointsToZero(q_full);
+        pinocchio::forwardKinematics(model_, *data_, q_full);
+        pinocchio::updateFramePlacements(model_, *data_);
+
+        const pinocchio::SE3 oMp = data_->oMf[pelvis_fid_];
+        const pinocchio::SE3 oMf = data_->oMf[fid];
+        return oMp.inverse() * oMf;
+    }
+
+    pinocchio::SE3 getPelvisToArmBase(ArmSide arm_side) const
+    {
+        return arm_side == ArmSide::LEFT ? pelvis_M_left_arm_base_ : pelvis_M_right_arm_base_;
+    }
+
+    pinocchio::FrameIndex pelvisFrameId() const { return pelvis_fid_; }
     
     // 获取关节索引：建立**“关节名称”与“数值向量索引”**之间的映射
     // 在机器人学中，不同的关节可能有不同的自由度（DoF）。例如，旋转关节占 1 个位置，而球关节可能占 4 个位置（四元数表示 q）和 3 个速度（角速度 v）。因此，不能简单地通过关节 ID 来遍历，必须查找它们在全局向量中的具体索引。
@@ -113,13 +173,29 @@ public:
     std::unique_ptr<pinocchio::Data> data_;
     std::string urdf_file_;
     std::string srdf_file_;
+    std::string pelvis_frame_;
+    std::string left_arm_base_frame_;
+    std::string right_arm_base_frame_;
+    std::vector<std::string> waist_joint_names_;
+
+    pinocchio::FrameIndex pelvis_fid_{0};
+    pinocchio::FrameIndex left_arm_base_fid_{0};
+    pinocchio::FrameIndex right_arm_base_fid_{0};
+    pinocchio::SE3 pelvis_M_left_arm_base_;
+    pinocchio::SE3 pelvis_M_right_arm_base_;
 };
 
 // IKSolver类的公共接口
 IKSolver::IKSolver(const std::string& urdf_file, const std::string& srdf_file)
     : urdf_file_(urdf_file), srdf_file_(srdf_file)
 {
-    pimpl_ = std::make_unique<Impl>(urdf_file, srdf_file);
+    pimpl_ = std::make_unique<Impl>(
+        urdf_file,
+        srdf_file,
+        pelvis_frame_,
+        left_arm_base_frame_,
+        right_arm_base_frame_,
+        waist_joints_);
     stats_.reset();
     // 根据实际的 URDF 文件，左臂关节的正确 q_idx 应该是：
     // left_joint1: 需要找到正确的索引
@@ -192,7 +268,8 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     double eps,
     int& iters_out,
     SolverMethod method,
-    ArmSide arm_side)
+    ArmSide arm_side,
+    const ArmKinematicsOptions& options)
 {
     using namespace pinocchio;
     using namespace Eigen;
@@ -202,9 +279,12 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     const std::string& ee_frame = arm_side == ArmSide::LEFT ? left_ee_frame_ : right_ee_frame_;
     const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
     FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame);
+    FrameIndex pelvis_fid = pimpl_->pelvisFrameId();
+    const SE3 pelvis_M_arm_base = pimpl_->getPelvisToArmBase(arm_side);
     const int n_arm = arm_joints.size();
 
     VectorXd q = neutral(model);
+    pimpl_->setWaistJointsToZero(q);
     for (int i = 0; i < n_arm; ++i) {
         int qi = model.joints[model.getJointId(arm_joints[i])].idx_q();
         q[qi] = q_init[i];
@@ -222,8 +302,17 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         forwardKinematics(model, data, q);
         updateFramePlacements(model, data);
 
+        const SE3 oMp = data.oMf[pelvis_fid];
+        SE3 oT_target;
+        if (options.reference_frame == ArmReferenceFrame::ARM_BASE) {
+            const SE3 oMarm_base = oMp * pelvis_M_arm_base;
+            oT_target = oMarm_base * T_target;
+        } else {
+            oT_target = oMp * T_target;
+        }
+
         SE3 T_current = data.oMf[ee_fid];
-        Motion err_motion = log6(T_current.actInv(T_target));
+        Motion err_motion = log6(T_current.actInv(oT_target));
         VectorXd err = err_motion.toVector(); // 6维向量: [v_x, v_y, v_z, w_x, w_y, w_z]
 
         double error_norm = err.norm();
@@ -369,7 +458,8 @@ Eigen::VectorXd IKSolver::solveArmIK(
     const Eigen::VectorXd& initial_q,
     int max_iters,
     double eps,
-    int* iterations)
+    int* iterations,
+    const ArmKinematicsOptions& options)
 {
     int total_iters = 0;
     int current_iters = 0;
@@ -388,7 +478,7 @@ Eigen::VectorXd IKSolver::solveArmIK(
 
     // 3. 第一次尝试(尝试快速求解 (LDLT))
     int first_stage_iters = std::max(max_iters, 200);
-    Eigen::VectorXd result = solveIK_Core(T_target, q_start, first_stage_iters, eps, current_iters, SolverMethod::LDLT, arm_side);
+    Eigen::VectorXd result = solveIK_Core(T_target, q_start, first_stage_iters, eps, current_iters, SolverMethod::LDLT, arm_side, options);
     total_iters += current_iters;
 
     if (result.size() > 0){
@@ -421,38 +511,17 @@ Eigen::VectorXd IKSolver::solveArmIK(
     return Eigen::VectorXd(); // 最终失败
 }
 
-PoseRPY IKSolver::computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side)
+PoseRPY IKSolver::computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side,
+                               const ArmKinematicsOptions& options)
 {
-    using namespace pinocchio;
-    
-    // 获取关节索引
-    std::vector<int> q_indices, v_indices;
-    const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
-    pimpl_->getJointIndices(arm_joints, q_indices, v_indices);
-    
-    // 构建完整q向量
-    Eigen::VectorXd q_full = neutral(pimpl_->model_);
-    for (size_t i = 0; i < static_cast<size_t>(q.size()) && i < q_indices.size(); ++i) {
-        q_full[q_indices[i]] = q[i];
-    }
-    
-    // 正运动学
-    forwardKinematics(pimpl_->model_, *pimpl_->data_, q_full);
-    updateFramePlacements(pimpl_->model_, *pimpl_->data_);
-    
-    // 获取末端位姿
-    const std::string& ee_frame = arm_side == ArmSide::LEFT ? left_ee_frame_ : right_ee_frame_;
-    FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame);
-    SE3 T = pimpl_->data_->oMf[ee_fid];
-    
-    // 转换为RPY
+    PoseSE3 pose_se3 = computeArmFK_SE3(q, arm_side, options);
     PoseRPY pose;
-    Eigen::Vector3d t = T.translation();
+    Eigen::Vector3d t = pose_se3.p;
     pose.x = t.x();
     pose.y = t.y();
     pose.z = t.z();
     
-    Eigen::Matrix3d R = T.rotation();
+    Eigen::Matrix3d R = pose_se3.R;
     if (std::abs(R(2,0)) < 1.0 - 1e-6) {
         pose.pitch = std::asin(-R(2,0));
         pose.roll  = std::atan2(R(2,1), R(2,2));
@@ -487,12 +556,14 @@ std::pair<Eigen::VectorXd, Eigen::VectorXd> IKSolver::getArmJointLimits(ArmSide 
     return {lower, upper};
 }
 
-PoseSE3 IKSolver::computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side)
+PoseSE3 IKSolver::computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side,
+                                   const ArmKinematicsOptions& options)
 {
     using namespace pinocchio;
     
     // 1. 将 7 维 q 映射到全量 q_full (处理有腰部或其它关节的情况)
     Eigen::VectorXd q_full = neutral(pimpl_->model_);
+    pimpl_->setWaistJointsToZero(q_full);
     const std::vector<std::string>& arm_joints = arm_side == ArmSide::LEFT ? left_arm_joints_ : right_arm_joints_;
     for (size_t i = 0; i < arm_joints.size(); ++i) {
         int qi = pimpl_->model_.joints[pimpl_->model_.getJointId(arm_joints[i])].idx_q();
@@ -506,7 +577,18 @@ PoseSE3 IKSolver::computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side)
     // 3. 获取末端 Frame 的 SE3 变换
     const std::string& ee_frame = arm_side == ArmSide::LEFT ? left_ee_frame_ : right_ee_frame_;
     FrameIndex ee_fid = pimpl_->getEeFrameId(ee_frame);
-    SE3 T = pimpl_->data_->oMf[ee_fid];
+    FrameIndex pelvis_fid = pimpl_->pelvisFrameId();
+    const SE3 oMp = pimpl_->data_->oMf[pelvis_fid];
+    const SE3 oT = pimpl_->data_->oMf[ee_fid];
+
+    SE3 T;
+    if (options.reference_frame == ArmReferenceFrame::ARM_BASE) {
+        const SE3 pelvis_M_arm_base = pimpl_->getPelvisToArmBase(arm_side);
+        const SE3 oMarm_base = oMp * pelvis_M_arm_base;
+        T = oMarm_base.inverse() * oT;
+    } else {
+        T = oMp.inverse() * oT;
+    }
     
     // 4. 封装结果
     PoseSE3 pose;
