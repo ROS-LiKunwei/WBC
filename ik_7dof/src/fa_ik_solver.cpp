@@ -497,7 +497,8 @@ Eigen::VectorXd IKSolver::solveArmIK(
             random_q[i] = dist(gen);
         }
 
-        result = solveIK_Core(T_target, random_q, max_iters, eps, current_iters, SolverMethod::SVD, arm_side);
+        result = solveIK_Core(T_target, random_q, max_iters, eps, current_iters, 
+            SolverMethod::SVD, arm_side, options);
         total_iters += current_iters;
         
         if (result.size() > 0) {
