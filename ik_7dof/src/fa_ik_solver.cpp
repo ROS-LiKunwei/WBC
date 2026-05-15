@@ -7,10 +7,14 @@
 #include <pinocchio/algorithm/kinematics-derivatives.hpp>
 #include <pinocchio/spatial/log.hpp>
 #include <Eigen/Dense>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <random>
+#include <limits>
 
 namespace fa_arm_kinematic
 {
@@ -269,7 +273,9 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     int& iters_out,
     SolverMethod method,
     ArmSide arm_side,
-    const ArmKinematicsOptions& options)
+    const ArmKinematicsOptions& options,
+    bool* exact_solution,
+    double* best_error)
 {
     using namespace pinocchio;
     using namespace Eigen;
@@ -295,6 +301,12 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     // 稳健模式 (SVD) 阻尼可以小一点，因为 SVD 本身有截断逻辑
     double lambda = method == SolverMethod::SVD ? 1e-3 : 1e-2;
     VectorXd grad_H = VectorXd::Zero(n_arm);
+    VectorXd best_q_arm = VectorXd::Zero(n_arm);
+    double best_error_norm = std::numeric_limits<double>::infinity();
+
+    if (exact_solution) {
+        *exact_solution = false;
+    }
     
     for (int iter = 0; iter < max_iters; ++iter) {
         iters_out = iter + 1;
@@ -317,11 +329,25 @@ Eigen::VectorXd IKSolver::solveIK_Core(
 
         double error_norm = err.norm();
 
+        // 记录当前迭代中误差最小的关节角，目标不可达时返回这个最优近似解。
+        if (error_norm < best_error_norm) {
+            best_error_norm = error_norm;
+            for (int i = 0; i < n_arm; ++i) {
+                best_q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
+            }
+        }
+
         // 精度达标则返回
         if (error_norm < eps) {
             VectorXd res(n_arm);
             for (int i = 0; i < n_arm; ++i)
                 res[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
+            if (exact_solution) {
+                *exact_solution = true;
+            }
+            if (best_error) {
+                *best_error = error_norm;
+            }
             return res;
         }
 
@@ -447,26 +473,30 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         }
     }
 
-    return VectorXd();
+    if (best_error) {
+        *best_error = best_error_norm;
+    }
+
+    return std::isfinite(best_error_norm) ? best_q_arm : VectorXd();
 }
 
 
 
-Eigen::VectorXd IKSolver::solveArmIK(
-    const pinocchio::SE3& T_target_in,
-    ArmSide arm_side,
-    const Eigen::VectorXd& initial_q,
-    int max_iters,
-    double eps,
-    int* iterations,
-    const ArmKinematicsOptions& options)
+IKResult IKSolver::solveArmIK(
+    const pinocchio::SE3 T_target_pose,
+    const ArmSide arm_side,
+    const Eigen::VectorXd initial_q,
+    const ArmKinematicsOptions options,
+    const int max_iters,
+    const double eps)
 {
+    IKResult ik_result;
     int total_iters = 0;
     int current_iters = 0;
 
     // --- 姿态正交化/四元数化 ---
     // 目的：修正 RPY 转换过程中可能产生的微小非正交误差，确保旋转矩阵严格有效
-    pinocchio::SE3 T_target = T_target_in;
+    pinocchio::SE3 T_target = T_target_pose;
     Eigen::Matrix3d R = T_target.rotation();
     Eigen::Quaterniond q_rot(R);     // 将矩阵转为四元数
     q_rot.normalize();               // 归一化四元数
@@ -478,13 +508,30 @@ Eigen::VectorXd IKSolver::solveArmIK(
 
     // 3. 第一次尝试(尝试快速求解 (LDLT))
     int first_stage_iters = std::max(max_iters, 200);
-    Eigen::VectorXd result = solveIK_Core(T_target, q_start, first_stage_iters, eps, current_iters, SolverMethod::LDLT, arm_side, options);
+    bool exact_solution = false;
+    double approx_error = std::numeric_limits<double>::infinity();
+    double best_approx_error = std::numeric_limits<double>::infinity();
+    Eigen::VectorXd best_approx;
+    Eigen::VectorXd result = solveIK_Core(
+        T_target, q_start, first_stage_iters, eps, current_iters, SolverMethod::LDLT,
+        arm_side, options, &exact_solution, &approx_error);
     total_iters += current_iters;
 
-    if (result.size() > 0){
-        if (iterations) *iterations = total_iters;
+    if (exact_solution && result.size() > 0){
         stats_.qr_stage_success++; // LDLT 阶段成功
-        return result;
+        ik_result.success = true;
+        ik_result.has_solution = true;
+        ik_result.q_solution = result;
+        ik_result.iterations = total_iters;
+        PoseSE3 pose = computeArmFK_SE3(result, arm_side, options);
+        ik_result.position_error = (T_target.translation() - pose.p).norm();
+        Eigen::AngleAxisd angle_diff(T_target.rotation().transpose() * pose.R);
+        ik_result.orientation_error = std::abs(angle_diff.angle());
+        return ik_result;
+    }
+    if (result.size() > 0 && approx_error < best_approx_error) {
+        best_approx_error = approx_error;
+        best_approx = result;
     }
 
     // --- 第二阶段：快速求解失败，尝试 SVD 稳健模式 + 随机重启 ---
@@ -497,19 +544,41 @@ Eigen::VectorXd IKSolver::solveArmIK(
             random_q[i] = dist(gen);
         }
 
-        result = solveIK_Core(T_target, random_q, max_iters, eps, current_iters, 
-            SolverMethod::SVD, arm_side, options);
+        result = solveIK_Core(
+            T_target, random_q, max_iters, eps, current_iters, SolverMethod::SVD,
+            arm_side, options, &exact_solution, &approx_error);
         total_iters += current_iters;
         
-        if (result.size() > 0) {
-            if (iterations) *iterations = total_iters;
+        if (exact_solution && result.size() > 0) {
             stats_.svd_stage_success++; // SVD 重启阶段成功
-            return result;
+            ik_result.success = true;
+            ik_result.has_solution = true;
+            ik_result.q_solution = result;
+            ik_result.iterations = total_iters;
+            PoseSE3 pose = computeArmFK_SE3(result, arm_side, options);
+            ik_result.position_error = (T_target.translation() - pose.p).norm();
+            Eigen::AngleAxisd angle_diff(T_target.rotation().transpose() * pose.R);
+            ik_result.orientation_error = std::abs(angle_diff.angle());
+            return ik_result;
+        }
+        if (result.size() > 0 && approx_error < best_approx_error) {
+            best_approx_error = approx_error;
+            best_approx = result;
         }
     }
 
-    if (iterations) *iterations = total_iters;
-    return Eigen::VectorXd(); // 最终失败
+    stats_.total_failures++;
+    ik_result.success = false;
+    ik_result.has_solution = best_approx.size() > 0;
+    ik_result.q_solution = best_approx;
+    ik_result.iterations = total_iters;
+    if (ik_result.has_solution) {
+        PoseSE3 pose = computeArmFK_SE3(best_approx, arm_side, options);
+        ik_result.position_error = (T_target.translation() - pose.p).norm();
+        Eigen::AngleAxisd angle_diff(T_target.rotation().transpose() * pose.R);
+        ik_result.orientation_error = std::abs(angle_diff.angle());
+    }
+    return ik_result; // 目标不可达时返回所有尝试中的最佳近似解
 }
 
 PoseRPY IKSolver::computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side,

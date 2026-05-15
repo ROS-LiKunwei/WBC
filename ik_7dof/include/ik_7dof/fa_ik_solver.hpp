@@ -31,6 +31,16 @@ struct ArmKinematicsOptions {
     ArmReferenceFrame reference_frame = ArmReferenceFrame::PELVIS;
 };
 
+struct IKResult
+{
+    bool success = false;                 // 是否达到精确阈值
+    bool has_solution = false;            // 是否有可用近似解
+    Eigen::VectorXd q_solution;           // 返回的关节角
+    double position_error = 0.0;          // 位置误差，单位 m
+    double orientation_error = 0.0;       // 姿态误差，单位 rad
+    int iterations = 0;                   // 实际迭代次数
+};
+
 enum class ArmSide {
     LEFT,
     RIGHT
@@ -58,16 +68,17 @@ public:
         int& iters_out,
         SolverMethod method,
         ArmSide arm_side = ArmSide::LEFT,
-        const ArmKinematicsOptions& options = ArmKinematicsOptions{});
+        const ArmKinematicsOptions& options = ArmKinematicsOptions{},
+        bool* exact_solution = nullptr,
+        double* best_error = nullptr);
 
-    Eigen::VectorXd solveArmIK(
-        const pinocchio::SE3& T_target_in,
-        ArmSide arm_side,
-        const Eigen::VectorXd& initial_q = Eigen::VectorXd(),
-        int max_iters = 100,
-        double eps = 1e-3,
-        int* iterations = nullptr,
-        const ArmKinematicsOptions& options = ArmKinematicsOptions{});
+    IKResult solveArmIK(
+        const pinocchio::SE3 T_target_pose,
+        const ArmSide arm_side,
+        const Eigen::VectorXd initial_q,
+        const ArmKinematicsOptions options,
+        const int max_iters = 1000,
+        const double eps = 1e-3);
 
     PoseRPY computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side,
                          const ArmKinematicsOptions& options = ArmKinematicsOptions{});

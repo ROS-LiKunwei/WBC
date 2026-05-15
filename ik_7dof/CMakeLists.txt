@@ -106,6 +106,22 @@ install(
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # ament_lint_auto_find_test_dependencies()
+
+  add_executable(fa_ik_approx_verify
+    src/fa_ik_approx_verify.cpp
+  )
+  ament_target_dependencies(fa_ik_approx_verify
+    Eigen3
+    pinocchio
+  )
+  target_link_libraries(fa_ik_approx_verify
+    fa_ik_solver_lib
+  )
+  target_compile_definitions(fa_ik_approx_verify
+    PRIVATE
+      IK_7DOF_WORKSPACE_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+  )
+  add_test(NAME fa_ik_approx_verify COMMAND fa_ik_approx_verify)
 endif()
 
 ament_package()

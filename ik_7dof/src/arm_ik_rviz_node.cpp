@@ -319,16 +319,16 @@ private:
             T_target.rotation(fk_result.R);
             
             // 4. 执行逆运动学求解
-            int iters = 0;
             auto start = std::chrono::high_resolution_clock::now();
-            Eigen::VectorXd q_solved = solver_->solveArmIK(
-                T_target, arm_side_, Eigen::VectorXd(), max_iters_, eps_, &iters, kinematics_options_);
+            IKResult ik_result = solver_->solveArmIK(
+                T_target, arm_side_, Eigen::VectorXd(), kinematics_options_);
             auto end = std::chrono::high_resolution_clock::now();
             
             // 5. 检查结果
-            if (q_solved.size() == 0) {
+            if (!ik_result.has_solution) {
                 RCLCPP_ERROR(this->get_logger(), "逆运动学求解失败！");
             } else {
+                const Eigen::VectorXd& q_solved = ik_result.q_solution;
                 logJointVector("逆运动学结果:", joint_names, q_solved);
                 
                 // 验证正逆解一致性
@@ -342,13 +342,13 @@ private:
                 RCLCPP_INFO(this->get_logger(), "  位置误差: %.8f m", pos_error);
                 RCLCPP_INFO(this->get_logger(), "  姿态误差: %.8f rad", rot_error);
                 
-                if (pos_error < 1e-3 && rot_error < 1e-3) {
+                if (ik_result.success) {
                     RCLCPP_INFO(this->get_logger(), "  ✅ 正逆解一致！");
                     success_count++;
                     std::chrono::duration<double, std::milli> elapsed = end - start;
-                    RCLCPP_INFO(this->get_logger(), "  求解耗时: %.4f ms，迭代: %d", elapsed.count(), iters);
+                    RCLCPP_INFO(this->get_logger(), "  求解耗时: %.4f ms，迭代: %d", elapsed.count(), ik_result.iterations);
                 } else {
-                    RCLCPP_INFO(this->get_logger(), "  ❌ 正逆解不一致！");
+                    RCLCPP_INFO(this->get_logger(), "  ❌ 未达到精确阈值，返回近似解！");
                 }
                 
                 //  6. 让 MoveIt 2 移动到 IK 解

@@ -91,16 +91,17 @@ pinocchio::SE3 T_target;
 T_target.translation(Eigen::Vector3d(0.25, 0.30, 0.45));
 T_target.rotation(Eigen::Matrix3d::Identity());
 
-int iters = 0;
-Eigen::VectorXd q_solved = solver.solveArmIK(
+IKResult result = solver.solveArmIK(
     T_target,
     ArmSide::LEFT,
     Eigen::VectorXd(),
-    1000,
-    1e-3,
-    &iters,
-    options
+    options,
+    100,
+    1e-3
 );
+if (result.has_solution) {
+    Eigen::VectorXd q_solved = result.q_solution;
+}
 ```
 
 ### 4. 指定底层求解方法

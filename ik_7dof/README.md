@@ -40,8 +40,8 @@ pinocchio::SE3 target;
 target.translation(fk.p);
 target.rotation(fk.R);
 
-Eigen::VectorXd q_solved = solver.solveArmIK(
-    target, ArmSide::LEFT, Eigen::VectorXd(), 1000, 1e-3, nullptr, options);
+IKResult result = solver.solveArmIK(
+    target, ArmSide::LEFT, Eigen::VectorXd(), options, 1000, 1e-3);
 ```
 
 ## 纯数值测试

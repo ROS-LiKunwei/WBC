@@ -176,17 +176,17 @@ private:
 
             pinocchio::SE3 T_target = makeTargetPose(fk_result);
 
-            int iters = 0;
             auto start = std::chrono::high_resolution_clock::now();
-            Eigen::VectorXd q_solved = solver_->solveArmIK(
-                T_target, arm_side_, Eigen::VectorXd(), max_iters_, eps_, &iters, kinematics_options_);
+            IKResult ik_result = solver_->solveArmIK(
+                T_target, arm_side_, Eigen::VectorXd(), kinematics_options_);
             auto end = std::chrono::high_resolution_clock::now();
 
             bool is_failed = false;
-            if (q_solved.size() == 0) {
+            if (!ik_result.has_solution) {
                 RCLCPP_ERROR(this->get_logger(), "逆运动学求解失败！");
                 is_failed = true;
             } else {
+                const Eigen::VectorXd& q_solved = ik_result.q_solution;
                 logJointVector("IK求解结果:", joint_names, q_solved);
 
                 auto fk_verify_se3 = solver_->computeArmFK_SE3(q_solved, arm_side_, kinematics_options_);
@@ -199,15 +199,15 @@ private:
                 RCLCPP_INFO(this->get_logger(), "一致性验证: pos_error=%.8f m, rot_error=%.8f rad",
                     pos_error, rot_error);
 
-                if (pos_error < 1e-3 && rot_error < 1e-3) {
+                if (ik_result.success) {
                     std::chrono::duration<double, std::milli> elapsed = end - start;
                     success_count++;
                     total_time_ms += elapsed.count();
-                    total_steps += iters;
+                    total_steps += ik_result.iterations;
                     RCLCPP_INFO(this->get_logger(), "  ✅ 正逆解一致，耗时 %.4f ms，迭代 %d 步",
-                        elapsed.count(), iters);
+                        elapsed.count(), ik_result.iterations);
                 } else {
-                    RCLCPP_INFO(this->get_logger(), "  ❌ 正逆解不一致！");
+                    RCLCPP_INFO(this->get_logger(), "  ❌ 未达到精确阈值，返回近似解！");
                     is_failed = true;
                 }
             }
