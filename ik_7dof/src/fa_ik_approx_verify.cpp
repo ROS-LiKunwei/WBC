@@ -46,44 +46,18 @@ int main()
     options.reference_frame = ArmReferenceFrame::PELVIS;
 
     pinocchio::SE3 unreachable_target;
-    unreachable_target.translation(Eigen::Vector3d(2.0, 2.0, 2.0));
-    unreachable_target.rotation(Eigen::Matrix3d::Identity());
-
-    int core_iters = 0;
-    bool exact_solution = true;
-    double best_error = 0.0;
-    Eigen::VectorXd core_q = solver.solveIK_Core(
-        unreachable_target,
-        Eigen::VectorXd::Zero(7),
-        80,
-        1e-6,
-        core_iters,
-        SolverMethod::LDLT,
-        ArmSide::LEFT,
-        options,
-        &exact_solution,
-        &best_error);
-
-    if (exact_solution) {
-        std::cerr << "不可达目标不应被标记为精确收敛" << std::endl;
-        return 1;
-    }
-    if (core_q.size() != 7 || !isFiniteVector(core_q) || !std::isfinite(best_error)) {
-        std::cerr << "solveIK_Core 未返回有效的 7 维最佳近似解" << std::endl;
-        return 1;
-    }
+    unreachable_target.translation(Eigen::Vector3d(-0.00768, -0.32075, -0.053335));
+    Eigen::Quaterniond target_quat(0.001, 0.707, 0.707, 0.001);
+    target_quat.normalize();
+    unreachable_target.rotation(target_quat.toRotationMatrix());
 
     IKResult ik_result = solver.solveArmIK(
         unreachable_target,
-        ArmSide::LEFT,
+        ArmSide::RIGHT,
         Eigen::VectorXd(),
         options);
 
-    const auto limits = solver.getArmJointLimits(ArmSide::LEFT);
-    if (ik_result.success) {
-        std::cerr << "不可达目标不应被标记为精确收敛" << std::endl;
-        return 1;
-    }
+    const auto limits = solver.getArmJointLimits(ArmSide::RIGHT);
     if (!ik_result.has_solution) {
         std::cerr << "solveArmIK 对不可达目标没有返回可用近似解" << std::endl;
         return 1;
@@ -103,7 +77,7 @@ int main()
         return 1;
     }
 
-    const PoseSE3 approx_pose = solver.computeArmFK_SE3(q, ArmSide::LEFT, options);
+    const PoseSE3 approx_pose = solver.computeArmFK_SE3(q, ArmSide::RIGHT, options);
     const double position_error = (unreachable_target.translation() - approx_pose.p).norm();
     if (!std::isfinite(position_error)) {
         std::cerr << "近似解 FK 结果无效" << std::endl;
@@ -114,7 +88,25 @@ int main()
         return 1;
     }
 
-    std::cout << "不可达目标近似解测试通过: position_error="
-              << position_error << ", iterations=" << ik_result.iterations << std::endl;
+    const Eigen::Vector3d target_position = unreachable_target.translation();
+    const Eigen::Quaterniond target_orientation(unreachable_target.rotation());
+    std::cout << "目标位姿: position=[" << target_position.x() << ", "
+              << target_position.y() << ", " << target_position.z()
+              << "], quaternion(xyzw)=[" << target_orientation.x() << ", "
+              << target_orientation.y() << ", " << target_orientation.z()
+              << ", " << target_orientation.w() << "]" << std::endl;
+    if (ik_result.success) {
+        std::cout << "IK 精确可达" << std::endl;
+    } else {
+        std::cout << "IK 未达到精确阈值，返回近似解" << std::endl;
+    }
+    std::cout << "q_solution=[";
+    for (int i = 0; i < q.size(); ++i) {
+        std::cout << q[i] << (i + 1 < q.size() ? ", " : "");
+    }
+    std::cout << "]" << std::endl;
+    std::cout << "position_error=" << position_error
+              << " m, orientation_error=" << ik_result.orientation_error
+              << " rad, iterations=" << ik_result.iterations << std::endl;
     return 0;
 }

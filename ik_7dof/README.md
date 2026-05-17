@@ -73,6 +73,26 @@ fa_left_arm_ik_failed_cases.log
 fa_right_arm_ik_failed_cases.log
 ```
 
+## 自动化测试
+
+开启 `BUILD_TESTING` 编译 `ik_7dof`：
+
+```bash
+colcon build --packages-select ik_7dof --cmake-args -DBUILD_TESTING=ON
+```
+
+执行 `fa_ik_approx_verify` 测试并直接在终端显示日志输出：
+
+```bash
+colcon test --packages-select ik_7dof --event-handlers console_direct+ --ctest-args -R fa_ik_approx_verify
+```
+
+也可以直接运行测试可执行文件查看完整打印：
+
+```bash
+./build/ik_7dof/fa_ik_approx_verify
+```
+
 ## RViz/MoveIt 测试
 
 ```bash
