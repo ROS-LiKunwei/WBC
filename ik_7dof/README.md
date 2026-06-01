@@ -116,3 +116,87 @@ ros2 run ik_7dof arm_ik_rviz_node --ros-args \
 
 当 `reference_frame:=pelvis` 时，Marker 发布在 `pelvis` 坐标系下；
 当 `reference_frame:=arm_base` 时，Marker 发布在 `waist_pitch_link` 坐标系下。
+
+## 腿部 MuJoCo 验证脚本
+
+脚本路径：
+
+```bash
+python3 scripts/leg_ik_mujoco_verify.py --pelvis_height 0.65 --knee_max 0.2 --ankle_x 0.1 --left_ankle_y 0.144 --right_ankle_y -0.144 --ankle_roll 0.0 --ankle_pitch 0.0 --ankle_yaw 0.0
+```
+
+该脚本加载 MuJoCo 模型，按指定约束求解双腿关节角，并用 FK 验证结果。当前自动 IK 使用的硬约束为：
+
+- `left_ankle_roll_link.x - pelvis.x == --ankle_x`
+- `right_ankle_roll_link.x - pelvis.x == --ankle_x`
+- `left_ankle_roll_link.y - pelvis.y == --left_ankle_y`；不传时使用腿部全 0 初始角度下的左脚踝 y 偏移
+- `right_ankle_roll_link.y - pelvis.y == --right_ankle_y`；不传时使用腿部全 0 初始角度下的右脚踝 y 偏移
+- 脚底高度满足 `--foot_offset_z`
+- 脚朝向满足 `--ankle_roll/--ankle_pitch/--ankle_yaw`
+
+### 固定膝关节为 0
+
+不传 `--knee_max` 时，脚本会固定 `left_knee_joint` 和 `right_knee_joint` 为 `0.0`，并尝试满足上述硬约束：
+
+```bash
+cd ~/humanoid_ws/src/ik_7dof
+python3 scripts/leg_ik_mujoco_verify.py --pelvis_height 0.7798 --headless --sim_time 0
+```
+
+如果指定骨盆高度不可达，脚本会失败并打印硬约束残差。
+
+### 指定膝关节最大角并寻找最近骨盆高度
+
+传入 `--knee_max` 后，脚本允许膝关节在 `[0, knee_max]` 范围内弯曲。如果目标 `--pelvis_height` 不可达，会返回最接近目标的可达骨盆高度，并继续用该高度做 FK/仿真验证：
+
+```bash
+python3 scripts/leg_ik_mujoco_verify.py --pelvis_height 0.65 --knee_max 0.5 --headless --sim_time 0
+```
+
+典型输出：
+
+```text
+目标骨盆高度: 0.650000 m
+采用骨盆高度: 0.755448 m
+骨盆高度偏差: 0.105448 m
+膝关节角度上限: left_knee_joint/right_knee_joint <= 0.500000 rad
+```
+
+如果 `--knee_max 1.2`，`--pelvis_height 0.65` 当前可直接满足，脚本会保持目标高度：
+
+```bash
+python3 scripts/leg_ik_mujoco_verify.py --pelvis_height 0.65 --knee_max 1.2 --headless --sim_time 0
+```
+
+也可以手动指定脚踝相对骨盆的目标位姿：
+
+```bash
+python3 scripts/leg_ik_mujoco_verify.py \
+  --pelvis_height 0.65 \
+  --knee_max 1.2 \
+  --ankle_x 0.0 \
+  --left_ankle_y 0.14 \
+  --right_ankle_y -0.14 \
+  --ankle_roll 0.0 \
+  --ankle_pitch 0.0 \
+  --ankle_yaw 0.0 \
+  --headless \
+  --sim_time 0
+```
+
+其中 `--ankle_x/--left_ankle_y/--right_ankle_y` 单位为 m，表示 `ankle_roll_link` 相对 `pelvis` 的目标位置偏移；`--ankle_roll/--ankle_pitch/--ankle_yaw` 单位为 rad，按 `Rz(yaw) @ Ry(pitch) @ Rx(roll)` 转换为目标朝向。
+
+### 参数
+
+| 参数 | 说明 |
+|------|------|
+| `--pelvis_height` | 目标骨盆高度，单位 m |
+| `--knee_max` | 自动 IK 时允许的膝关节最大角，单位 rad；不传时膝关节固定为 `0.0` |
+| `--foot_offset_z` | 额外脚底高度偏移，单位 m，默认 `0.0` |
+| `--ankle_x` | 左右 `ankle_roll_link.x - pelvis.x` 的目标偏移，单位 m，默认 `0.0` |
+| `--left_ankle_y` | `left_ankle_roll_link.y - pelvis.y` 的目标偏移，单位 m；不传时使用腿部全 0 初始偏移 |
+| `--right_ankle_y` | `right_ankle_roll_link.y - pelvis.y` 的目标偏移，单位 m；不传时使用腿部全 0 初始偏移 |
+| `--ankle_roll` / `--ankle_pitch` / `--ankle_yaw` | 左右脚踝目标朝向 RPY，单位 rad，默认均为 `0.0` |
+| `--left_q` / `--right_q` | 手动指定左右腿 6 个关节角；不能和 `--knee_max` 同时使用 |
+| `--headless` | 不启动 MuJoCo viewer，只输出验证结果 |
+| `--sim_time` | headless/viewer 模式下保持姿态仿真的时间，默认 `10.0` 秒；设为 `0` 只做初始 FK 验证 |
