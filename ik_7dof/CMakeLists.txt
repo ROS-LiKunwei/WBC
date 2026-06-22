@@ -4,6 +4,7 @@ project(ik_7dof)
 # 设置 C++ 标准
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -11,6 +12,9 @@ endif()
 
 # 1. 查找依赖
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(pybind11 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
@@ -44,6 +48,24 @@ target_include_directories(fa_ik_solver_lib
     $<INSTALL_INTERFACE:include>
     ${EIGEN3_INCLUDE_DIRS}
 )
+
+# Python extension for direct access from BeaVR
+pybind11_add_module(ik_7dof_pybind
+  src/fa_ik_pybind.cpp
+)
+
+target_link_libraries(ik_7dof_pybind
+  PRIVATE
+    fa_ik_solver_lib
+)
+
+target_include_directories(ik_7dof_pybind
+  PRIVATE
+    ${EIGEN3_INCLUDE_DIRS}
+)
+
+ament_get_python_install_dir(PYTHON_INSTALL_DIR)
+_ament_cmake_python_register_environment_hook()
 
 # 3. 创建可执行文件 (ROS 2 节点)
 add_executable(fa_arm_kinematic_node
@@ -96,6 +118,11 @@ install(
 install(
   DIRECTORY include/
   DESTINATION include
+)
+
+install(
+  TARGETS ik_7dof_pybind
+  LIBRARY DESTINATION ${PYTHON_INSTALL_DIR}
 )
 
 install(

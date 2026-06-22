@@ -70,6 +70,7 @@ public:
         ArmSide arm_side = ArmSide::LEFT,
         const ArmKinematicsOptions& options = ArmKinematicsOptions{},
         bool* exact_solution = nullptr,
+        bool* acceptable_solution = nullptr,
         double* best_error = nullptr);
 
     IKResult solveArmIK(
@@ -77,7 +78,7 @@ public:
         const ArmSide arm_side,
         const Eigen::VectorXd initial_q,
         const ArmKinematicsOptions options,
-        const int max_iters = 1000,
+        const int max_iters = 200,
         const double eps = 1e-3);
 
     PoseRPY computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side,

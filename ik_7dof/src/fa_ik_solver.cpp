@@ -13,7 +13,6 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
-#include <random>
 #include <limits>
 
 namespace fa_arm_kinematic
@@ -275,6 +274,7 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     ArmSide arm_side,
     const ArmKinematicsOptions& options,
     bool* exact_solution,
+    bool* acceptable_solution,
     double* best_error)
 {
     using namespace pinocchio;
@@ -307,6 +307,10 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     if (exact_solution) {
         *exact_solution = false;
     }
+    if (acceptable_solution) {
+        *acceptable_solution = false;
+    }
+    (void)eps;
     
     for (int iter = 0; iter < max_iters; ++iter) {
         iters_out = iter + 1;
@@ -328,6 +332,8 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         VectorXd err = err_motion.toVector(); // 6维向量: [v_x, v_y, v_z, w_x, w_y, w_z]
 
         double error_norm = err.norm();
+        double position_error = err.head<3>().norm();
+        double orientation_error = err.tail<3>().norm();
 
         // 记录当前迭代中误差最小的关节角，目标不可达时返回这个最优近似解。
         if (error_norm < best_error_norm) {
@@ -337,13 +343,20 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             }
         }
 
-        // 精度达标则返回
-        if (error_norm < eps) {
+        // 在线遥操作分两级判定：
+        // 精确解：位置 <= 5mm 且姿态 <= 0.05rad。
+        // 可用近似解：位置 <= 5cm 且姿态 <= 0.05rad，立即返回以保证实时性和连续性。
+        const bool exact_reached = position_error <= 0.005 && orientation_error <= 0.05;
+        const bool acceptable_reached = position_error <= 0.05 && orientation_error <= 0.05;
+        if (exact_reached || (acceptable_reached && iter > 0)) {
             VectorXd res(n_arm);
             for (int i = 0; i < n_arm; ++i)
                 res[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             if (exact_solution) {
-                *exact_solution = true;
+                *exact_solution = exact_reached;
+            }
+            if (acceptable_solution) {
+                *acceptable_solution = true;
             }
             if (best_error) {
                 *best_error = error_norm;
@@ -389,9 +402,11 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                 q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             } 
 
-            // 定义手臂自然下垂状态(全0)为最舒适状态。
-            VectorXd q_rest = VectorXd::Zero(n_arm); 
-            // 舒适姿态的拉力系数（要比较小，不能喧宾夺主）
+            // 遥操作中优先保持当前 IK 分支，同时保留很弱的零位舒适姿态偏置。
+            const double continuity_weight = 1.0;
+            VectorXd q_comfort = VectorXd::Zero(n_arm);
+            VectorXd q_rest = continuity_weight * q_init + (1.0 - continuity_weight) * q_comfort;
+            // 混合 rest 姿态的拉力系数（要比较小，不能喧宾夺主）
             double k_rest = 0.05;
 
             const double threshold_percent = 0.05; // 5% 的边缘触发力场
@@ -410,10 +425,10 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                     limit_repulsion = 0.01 * std::pow((margin - dist_to_lower)/margin, 2);
                 }
                 
-                // 计算舒适姿态拉力 (低优)
+                // 计算混合 rest 姿态拉力 (低优)
                 double comfort_pull = -k_rest * (q_arm[i] - q_rest[i]);
 
-                // 叠加梯度：当靠近限位时，limit_repulsion 会急剧变大，掩盖住 comfort_pull
+                // 叠加梯度：当靠近限位时，limit_repulsion 会急剧变大，掩盖住 rest 姿态拉力
                 grad_H[i] = limit_repulsion + comfort_pull;
             }
 
@@ -457,12 +472,19 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         }
 
         // --- 自适应步长 ---
-        double adaptive_dt = (error_norm > 1e-1) ? 0.2 : 0.6; 
+        double adaptive_dt = (error_norm > 1e-1) ? 0.2 : 0.6;
+        VectorXd delta_q = dq * adaptive_dt;
+        // 对齐 sysmo32 实时 IK：每轮迭代限制关节增量，近似解也必须连续。
+        const double max_joint_step_rad = 1.0;
+        const double delta_norm = delta_q.norm();
+        if (delta_norm > max_joint_step_rad) {
+            delta_q *= max_joint_step_rad / delta_norm;
+        }
 
         // 更新 q 并截断限位
         for (int i = 0; i < n_arm; ++i) {
             int qi = model.joints[model.getJointId(arm_joints[i])].idx_q();
-            q[qi] += dq[i] * adaptive_dt;
+            q[qi] += delta_q[i];
             q[qi] = std::max(model.lowerPositionLimit[qi], std::min(model.upperPositionLimit[qi], q[qi]));
         }
 
@@ -507,19 +529,21 @@ IKResult IKSolver::solveArmIK(
     Eigen::VectorXd q_start = (initial_q.size() == 7) ? initial_q : (limits.first + limits.second) / 2.0;
 
     // 3. 第一次尝试(尝试快速求解 (LDLT))
-    int first_stage_iters = std::max(max_iters, 200);
+    const int per_stage_iter_budget = std::max(max_iters, 1);
+    int first_stage_iters = per_stage_iter_budget;
     bool exact_solution = false;
+    bool acceptable_solution = false;
     double approx_error = std::numeric_limits<double>::infinity();
     double best_approx_error = std::numeric_limits<double>::infinity();
     Eigen::VectorXd best_approx;
     Eigen::VectorXd result = solveIK_Core(
         T_target, q_start, first_stage_iters, eps, current_iters, SolverMethod::LDLT,
-        arm_side, options, &exact_solution, &approx_error);
+        arm_side, options, &exact_solution, &acceptable_solution, &approx_error);
     total_iters += current_iters;
 
-    if (exact_solution && result.size() > 0){
+    if (acceptable_solution && result.size() > 0){
         stats_.qr_stage_success++; // LDLT 阶段成功
-        ik_result.success = true;
+        ik_result.success = exact_solution;
         ik_result.has_solution = true;
         ik_result.q_solution = result;
         ik_result.iterations = total_iters;
@@ -534,37 +558,45 @@ IKResult IKSolver::solveArmIK(
         best_approx = result;
     }
 
-    // --- 第二阶段：快速求解失败，尝试 SVD 稳健模式 + 随机重启 ---
-    std::mt19937 gen(std::random_device{}()); // 使用真实随机数种子
+    // 实时遥操作使用很小的 max_iters 时，优先返回当前连续初值附近的近似解。
+    // 继续进入 SVD 稳健阶段可能跳到另一组等价 IK 分支，表现为手臂突然卡住或大幅跳变。
+    if (per_stage_iter_budget <= 10 && best_approx.size() > 0) {
+        stats_.total_failures++;
+        ik_result.success = false;
+        ik_result.has_solution = true;
+        ik_result.q_solution = best_approx;
+        ik_result.iterations = total_iters;
+        PoseSE3 pose = computeArmFK_SE3(best_approx, arm_side, options);
+        ik_result.position_error = (T_target.translation() - pose.p).norm();
+        Eigen::AngleAxisd angle_diff(T_target.rotation().transpose() * pose.R);
+        ik_result.orientation_error = std::abs(angle_diff.angle());
+        return ik_result;
+    }
 
-    for (int r = 0; r < 10; ++r) {
-        Eigen::VectorXd random_q(7);
-        for (int i = 0; i < 7; ++i) {
-            std::uniform_real_distribution<double> dist(limits.first[i], limits.second[i]);
-            random_q[i] = dist(gen);
-        }
+    // --- 第二阶段：快速求解失败，只用当前连续初值做一次 SVD 稳健求解 ---
+    // 在线遥操作需要时间连续性。随机重启虽然能提高离线精确解概率，
+    // 但会显著增加耗时，并且可能在等价 IK 分支之间跳变。
+    Eigen::VectorXd svd_start = best_approx.size() == 7 ? best_approx : q_start;
+    result = solveIK_Core(
+        T_target, svd_start, per_stage_iter_budget, eps, current_iters, SolverMethod::SVD,
+        arm_side, options, &exact_solution, &acceptable_solution, &approx_error);
+    total_iters += current_iters;
 
-        result = solveIK_Core(
-            T_target, random_q, max_iters, eps, current_iters, SolverMethod::SVD,
-            arm_side, options, &exact_solution, &approx_error);
-        total_iters += current_iters;
-        
-        if (exact_solution && result.size() > 0) {
-            stats_.svd_stage_success++; // SVD 重启阶段成功
-            ik_result.success = true;
-            ik_result.has_solution = true;
-            ik_result.q_solution = result;
-            ik_result.iterations = total_iters;
-            PoseSE3 pose = computeArmFK_SE3(result, arm_side, options);
-            ik_result.position_error = (T_target.translation() - pose.p).norm();
-            Eigen::AngleAxisd angle_diff(T_target.rotation().transpose() * pose.R);
-            ik_result.orientation_error = std::abs(angle_diff.angle());
-            return ik_result;
-        }
-        if (result.size() > 0 && approx_error < best_approx_error) {
-            best_approx_error = approx_error;
-            best_approx = result;
-        }
+    if (acceptable_solution && result.size() > 0) {
+        stats_.svd_stage_success++;
+        ik_result.success = exact_solution;
+        ik_result.has_solution = true;
+        ik_result.q_solution = result;
+        ik_result.iterations = total_iters;
+        PoseSE3 pose = computeArmFK_SE3(result, arm_side, options);
+        ik_result.position_error = (T_target.translation() - pose.p).norm();
+        Eigen::AngleAxisd angle_diff(T_target.rotation().transpose() * pose.R);
+        ik_result.orientation_error = std::abs(angle_diff.angle());
+        return ik_result;
+    }
+    if (result.size() > 0 && approx_error < best_approx_error) {
+        best_approx_error = approx_error;
+        best_approx = result;
     }
 
     stats_.total_failures++;
