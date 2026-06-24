@@ -62,6 +62,10 @@ install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
 install(PROGRAMS
   scripts/plot_min_snap_tracking.py
   DESTINATION lib/${PROJECT_NAME}

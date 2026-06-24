@@ -195,8 +195,14 @@ source install/setup.bash
 ## 运行
 
 ```bash
-ros2 run min_snap min_snap_node --ros-args \
-  --params-file /home/likunwei/humanoid_ws/src/min_snap/config/min_snap.yaml
+ros2 launch min_snap min_snap.launch.py
+```
+
+默认 launch 会把 `/home/likunwei/humanoid_ws/src/min_snap/config/min_snap.yaml` 作为参数文件传给 `min_snap_node`。如需换配置：
+
+```bash
+ros2 launch min_snap min_snap.launch.py \
+  params_file:=/path/to/min_snap.yaml
 ```
 
 ## 测试发布目标
@@ -219,6 +225,79 @@ ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
 ros2 topic echo /upper_position_controller/commands
 ros2 topic echo /min_snap/desired_joint_states
 ```
+
+## C++ 使用示例
+
+其他 ROS2 C++ 节点可以直接发布 `min_snap/msg/MinSnapTarget` 到 `/min_snap/target`。下面是一个最小 publisher 示例：
+
+```cpp
+#include <chrono>
+#include <memory>
+
+#include "min_snap/msg/min_snap_target.hpp"
+#include "rclcpp/rclcpp.hpp"
+
+using namespace std::chrono_literals;
+
+class MinSnapTargetPublisher : public rclcpp::Node
+{
+public:
+  MinSnapTargetPublisher()
+  : Node("min_snap_target_publisher")
+  {
+    publisher_ = create_publisher<min_snap::msg::MinSnapTarget>("/min_snap/target", 10);
+    timer_ = create_wall_timer(500ms, [this]() { publish_once(); });
+  }
+
+private:
+  void publish_once()
+  {
+    min_snap::msg::MinSnapTarget msg;
+    msg.left_arm_target_rad = {0.0, 0.2, 0.0, -0.5, 0.0, 0.0, 0.0};
+    msg.right_arm_target_rad = {0.0, -0.2, 0.0, -0.5, 0.0, 0.0, 0.0};
+    msg.expected_duration_s = 0.5;
+    msg.max_velocity_rad_s = 0.25;
+    msg.max_acceleration_rad_s2 = 0.25;
+
+    publisher_->publish(msg);
+    RCLCPP_INFO(get_logger(), "Published one min_snap target");
+    timer_->cancel();
+  }
+
+  rclcpp::Publisher<min_snap::msg::MinSnapTarget>::SharedPtr publisher_;
+  rclcpp::TimerBase::SharedPtr timer_;
+};
+
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<MinSnapTargetPublisher>());
+  rclcpp::shutdown();
+  return 0;
+}
+```
+
+如果这个示例放在另一个 ROS2 包中，`package.xml` 至少需要依赖：
+
+```xml
+<depend>rclcpp</depend>
+<depend>min_snap</depend>
+```
+
+对应的 `CMakeLists.txt` 可写成：
+
+```cmake
+find_package(rclcpp REQUIRED)
+find_package(min_snap REQUIRED)
+
+add_executable(min_snap_target_publisher src/min_snap_target_publisher.cpp)
+ament_target_dependencies(min_snap_target_publisher rclcpp min_snap)
+
+install(TARGETS min_snap_target_publisher
+  DESTINATION lib/${PROJECT_NAME})
+```
+
+运行前先启动 `min_snap_node`，并确保 `/joint_states` 中存在目标机器人所需的手臂关节状态。
 
 ## 与 VR 遥操作通信
 

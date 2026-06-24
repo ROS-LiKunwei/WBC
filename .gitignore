@@ -28,6 +28,8 @@ colcon_*
 
 # 日志文件
 *.log
+*.csv
+*.png
 
 # 用户指定的屏蔽文件夹
 .vscode/

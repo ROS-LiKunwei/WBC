@@ -217,6 +217,7 @@ private:
     run_log_output_dir_ = declare_parameter<std::string>(
       "run_log_output_dir", "/home/likunwei/humanoid_ws/src/min_snap/Log");
     run_log_period_s_ = declare_parameter<double>("run_log_period_s", 0.1);
+    run_log_warn_throttle_s_ = declare_parameter<double>("run_log_warn_throttle_s", 2.0);
     const auto neck_default = declare_parameter<std::vector<double>>("neck_default_position", {0.0, 0.0});
     if (neck_default.size() == kNeckJointCount && finite_vector(neck_default)) {
       neck_default_[0] = neck_default[0];
@@ -248,11 +249,11 @@ private:
             get_logger(), *get_clock(), 2000,
             "Ignoring invalid /joint_states velocity for joint '%s': %.6f limit %.6f",
             msg.name[i].c_str(), velocity, joint_state_velocity_abs_limit_rad_s_);
-          write_run_log(
+          write_run_log_warn_throttled(
+            "joint_state_velocity_invalid:" + msg.name[i],
             "joint_state_velocity_ignored joint=" + msg.name[i] +
             " value=" + format_double(velocity) +
-            " limit=" + format_double(joint_state_velocity_abs_limit_rad_s_),
-            "WARN");
+            " limit=" + format_double(joint_state_velocity_abs_limit_rad_s_));
         }
       }
     }
@@ -261,10 +262,10 @@ private:
         get_logger(), *get_clock(), 2000,
         "Ignoring /joint_states velocity: velocity size %zu is smaller than name size %zu",
         msg.velocity.size(), msg.name.size());
-      write_run_log(
+      write_run_log_warn_throttled(
+        "joint_state_velocity_size_mismatch",
         "joint_state_velocity_ignored reason=size_mismatch velocity_size=" +
-        std::to_string(msg.velocity.size()) + " name_size=" + std::to_string(msg.name.size()),
-        "WARN");
+        std::to_string(msg.velocity.size()) + " name_size=" + std::to_string(msg.name.size()));
     }
     last_joint_state_time_ = now();
 
@@ -806,6 +807,22 @@ private:
     write_run_log(message);
   }
 
+  void write_run_log_warn_throttled(const std::string & key, const std::string & message)
+  {
+    if (!run_log_file_.is_open()) {
+      return;
+    }
+    const auto now_time = now();
+    const auto last_it = last_warn_log_times_.find(key);
+    if (last_it != last_warn_log_times_.end() &&
+      (now_time - last_it->second).seconds() < std::max(0.001, run_log_warn_throttle_s_))
+    {
+      return;
+    }
+    last_warn_log_times_[key] = now_time;
+    write_run_log(message, "WARN");
+  }
+
   void log_publish_sample(
     double elapsed,
     const ArmTrajectorySample & left,
@@ -895,6 +912,7 @@ private:
   bool record_run_log_{true};
   std::string run_log_output_dir_;
   double run_log_period_s_{0.1};
+  double run_log_warn_throttle_s_{2.0};
   NeckArray neck_default_{0.0, 0.0};
   double speed_mode_{4.0};
   Sysmo32ReservedArray reserved_{0.0, 0.0, 0.0, 0.0};
@@ -917,6 +935,7 @@ private:
   rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_run_log_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_publish_log_time_{0, 0, RCL_ROS_TIME};
+  std::unordered_map<std::string, rclcpp::Time> last_warn_log_times_;
   bool has_arm_joint_state_{false};
   bool has_goal_{false};
   ArmArray latest_left_goal_{};
