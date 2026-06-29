@@ -402,14 +402,16 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                 q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             } 
 
-            // 遥操作中优先保持当前 IK 分支，同时保留很弱的零位舒适姿态偏置。
-            const double continuity_weight = 1.0;
-            VectorXd q_comfort = VectorXd::Zero(n_arm);
-            VectorXd q_rest = continuity_weight * q_init + (1.0 - continuity_weight) * q_comfort;
-            // 混合 rest 姿态的拉力系数（要比较小，不能喧宾夺主）
-            double k_rest = 0.05;
+            // 遥操作中仍优先保持当前 IK 分支，但给零空间留出一部分
+            // 中间姿态偏置，避免肘/腕长期贴着硬限位运行。
+            const double continuity_weight = 0.8;
+            VectorXd q_mid = 0.5 * (limits.first + limits.second);
+            VectorXd q_rest = continuity_weight * q_init + (1.0 - continuity_weight) * q_mid;
+            // rest 姿态拉力保持较小，主要作用是缓慢离开不舒服构型。
+            double k_rest = 0.08;
 
-            const double threshold_percent = 0.05; // 5% 的边缘触发力场
+            const double threshold_percent = 0.15; // 15% 的边缘触发力场
+            const double limit_gain = 0.4;
 
             for(int i=0; i<n_arm; ++i) {
                 double dist_to_upper = limits.second[i] - q_arm[i];
@@ -420,9 +422,11 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                 // 计算限位斥力 (高优)   斥力 = 增益系数 * ((边界厚度 - 当前距离) / 边界厚度)^2
                 double limit_repulsion = 0.0;
                 if (dist_to_upper < margin) {
-                    limit_repulsion = -0.01 * std::pow((margin - dist_to_upper)/margin, 2); 
+                    const double x = (margin - dist_to_upper) / margin;
+                    limit_repulsion = -limit_gain * x * x;
                 } else if (dist_to_lower < margin) {
-                    limit_repulsion = 0.01 * std::pow((margin - dist_to_lower)/margin, 2);
+                    const double x = (margin - dist_to_lower) / margin;
+                    limit_repulsion = limit_gain * x * x;
                 }
                 
                 // 计算混合 rest 姿态拉力 (低优)
@@ -437,7 +441,7 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             for(int i=0; i<n_arm; ++i) 
                 grad_H[i] = std::max(-max_grad, std::min(max_grad, grad_H[i]));
 
-            repulsion_gain = (error_norm < 0.05) ? 0.0 : 0.001;
+            repulsion_gain = (error_norm < 0.02) ? 0.01 : 0.05;
         }
 
         // 基础斥力向量
@@ -485,7 +489,14 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         for (int i = 0; i < n_arm; ++i) {
             int qi = model.joints[model.getJointId(arm_joints[i])].idx_q();
             q[qi] += delta_q[i];
-            q[qi] = std::max(model.lowerPositionLimit[qi], std::min(model.upperPositionLimit[qi], q[qi]));
+            const double soft_margin = 0.05;  // rad，避免 IK 结果贴住硬限位
+            const double lower = model.lowerPositionLimit[qi] + soft_margin;
+            const double upper = model.upperPositionLimit[qi] - soft_margin;
+            if (lower < upper) {
+                q[qi] = std::max(lower, std::min(upper, q[qi]));
+            } else {
+                q[qi] = std::max(model.lowerPositionLimit[qi], std::min(model.upperPositionLimit[qi], q[qi]));
+            }
         }
 
         // 只有当误差确实很小时，才减小阻尼以加速最后收敛

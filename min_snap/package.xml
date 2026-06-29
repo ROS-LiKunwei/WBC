@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>min_snap</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>FA upper-body minimum-snap trajectory optimizer node.</description>
   <maintainer email="likunwei@example.com">likunwei</maintainer>
   <license>Apache-2.0</license>
