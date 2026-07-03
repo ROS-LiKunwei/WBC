@@ -27,11 +27,11 @@ min_snap_node:
     default_expected_duration_s: 0.1
 
     # 默认最大速度和最大加速度。当目标消息没有提供有效约束时使用。
-    default_max_velocity_rad_s: 1.0
-    default_max_acceleration_rad_s2: 10.0
+    default_max_velocity_rad_s: 1.2
+    default_max_acceleration_rad_s2: 8.0
 
     # 如果候选轨迹违反速度、加速度或关节限位，就把轨迹时长乘以该系数后重新规划。
-    duration_scale_on_violation: 1.1
+    duration_scale_on_violation: 1.12
 
     # 约束搜索过程中允许扩展到的最大轨迹时长。
     # 如果 duration 超过该值，直接停止规划并保持当前关节，避免生成异常长时长轨迹。
@@ -39,7 +39,7 @@ min_snap_node:
     max_duration_on_violation_s: 2.0
 
     # 延长轨迹时长的最大重试次数。如果全部重试后仍不满足约束，会报 constraint_search_exhausted。
-    max_duration_search_iterations: 100
+    max_duration_search_iterations: 10
 
     # 用于检查生成轨迹约束的采样点数量。数值越大越容易发现超限，但规划耗时也会增加。
     constraint_sample_count: 200
@@ -85,6 +85,12 @@ min_snap_node:
 
     # /joint_states 超过该时间未更新时，认为状态超时，并暂停命令发布。
     joint_state_timeout_s: 0.1
+
+    # 轨迹时间走完后，用 /joint_states 判断当前目标是否真正到位。
+    # 左右臂任一关节与目标的最大误差小于该阈值，并持续 goal_reached_hold_s 后，
+    # planner 会正常退出 active 状态，避免很久以后仍被判定为从 active trajectory 重规划。
+    goal_reached_position_tolerance_rad: 0.01
+    goal_reached_hold_s: 0.05
 
     # tracking CSV 记录开关。为 true 时，记录实际 joint_states，以及优化后的期望位置、
     # 速度、加速度、加加速度到 tracking_output_dir。

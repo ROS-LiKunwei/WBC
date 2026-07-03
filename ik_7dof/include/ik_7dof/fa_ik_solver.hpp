@@ -29,6 +29,11 @@ enum class ArmReferenceFrame {
 
 struct ArmKinematicsOptions {
     ArmReferenceFrame reference_frame = ArmReferenceFrame::PELVIS;
+    bool skip_svd_fallback = false;
+    double position_weight = 1.0;
+    double orientation_weight = 1.0;
+    double acceptable_position_error = 0.05;
+    double acceptable_orientation_error = 0.05;
 };
 
 struct IKResult

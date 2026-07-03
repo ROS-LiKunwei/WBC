@@ -210,6 +210,9 @@ private:
     min_replan_interval_s_ = declare_parameter<double>("min_replan_interval_s", 0.016);
     require_joint_state_before_start_ = declare_parameter<bool>("require_joint_state_before_start", true);
     joint_state_timeout_s_ = declare_parameter<double>("joint_state_timeout_s", 0.5);
+    goal_reached_position_tolerance_rad_ =
+      declare_parameter<double>("goal_reached_position_tolerance_rad", 0.01);
+    goal_reached_hold_s_ = declare_parameter<double>("goal_reached_hold_s", 0.05);
     record_tracking_ = declare_parameter<bool>("record_tracking", false);
     tracking_output_dir_ = declare_parameter<std::string>(
       "tracking_output_dir", "/home/likunwei/humanoid_ws/src/min_snap/logs");
@@ -411,6 +414,7 @@ private:
 
     trajectory_start_time_ = now_time;
     last_plan_time_ = now_time;
+    goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     latest_left_goal_ = left_goal;
     latest_right_goal_ = right_goal;
     has_goal_ = true;
@@ -596,6 +600,63 @@ private:
         now_time.seconds(), latest_positions_, latest_velocities_, desired_position, desired_velocity,
         desired_acceleration, desired_jerk);
     }
+
+    maybe_deactivate_completed_trajectory(now_time, elapsed);
+  }
+
+  void maybe_deactivate_completed_trajectory(const rclcpp::Time & now_time, double elapsed)
+  {
+    if (!left_planner_.finished(elapsed) || !right_planner_.finished(elapsed)) {
+      goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+      return;
+    }
+    if (!has_goal_) {
+      return;
+    }
+
+    ArmArray actual_left{};
+    ArmArray actual_right{};
+    if (!extract_active_arm_positions(latest_positions_, actual_left, actual_right)) {
+      goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+      return;
+    }
+
+    const double tolerance =
+      std::isfinite(goal_reached_position_tolerance_rad_) && goal_reached_position_tolerance_rad_ > 0.0 ?
+      goal_reached_position_tolerance_rad_ : 0.0;
+    double left_error = 0.0;
+    double right_error = 0.0;
+    for (std::size_t i = 0; i < active_arm_joint_count_; ++i) {
+      left_error = std::max(left_error, std::abs(actual_left[i] - left_planner_.goal()[i]));
+      right_error = std::max(right_error, std::abs(actual_right[i] - right_planner_.goal()[i]));
+    }
+    const double max_error = std::max(left_error, right_error);
+    if (max_error > tolerance) {
+      goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+      return;
+    }
+
+    if (goal_reached_since_.nanoseconds() == 0) {
+      goal_reached_since_ = now_time;
+      return;
+    }
+    const double hold_s =
+      std::isfinite(goal_reached_hold_s_) && goal_reached_hold_s_ > 0.0 ? goal_reached_hold_s_ : 0.0;
+    if ((now_time - goal_reached_since_).seconds() < hold_s) {
+      return;
+    }
+
+    RCLCPP_INFO(
+      get_logger(),
+      "Min-snap target reached; deactivating trajectory. left_err=%.6f right_err=%.6f tolerance=%.6f",
+      left_error, right_error, tolerance);
+    write_run_log(
+      "trajectory_completed target_seq=" + std::to_string(target_sequence_) +
+      " elapsed_s=" + format_double(elapsed) +
+      " left_max_abs_err=" + format_double(left_error) +
+      " right_max_abs_err=" + format_double(right_error) +
+      " tolerance=" + format_double(tolerance));
+    deactivate_trajectories("target_reached");
   }
 
   bool clamp_sample_to_publish_limits(ArmTrajectorySample & sample, const std::string & label)
@@ -739,6 +800,7 @@ private:
     left_planner_.deactivate();
     right_planner_.deactivate();
     has_goal_ = false;
+    goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     write_run_log("trajectories_deactivated reason=" + reason);
   }
 
@@ -907,6 +969,8 @@ private:
   double min_replan_interval_s_{0.016};
   bool require_joint_state_before_start_{true};
   double joint_state_timeout_s_{0.5};
+  double goal_reached_position_tolerance_rad_{0.01};
+  double goal_reached_hold_s_{0.05};
   bool record_tracking_{false};
   std::string tracking_output_dir_;
   bool record_run_log_{true};
@@ -933,6 +997,7 @@ private:
   rclcpp::Time trajectory_start_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_joint_state_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time goal_reached_since_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_run_log_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_publish_log_time_{0, 0, RCL_ROS_TIME};
   std::unordered_map<std::string, rclcpp::Time> last_warn_log_times_;

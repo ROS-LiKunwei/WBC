@@ -17,6 +17,15 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
+
+# ROS Humble's eigenpy exports Boost.Python as python310, which CMake 3.22's
+# stock FindBoost cannot map back to boost/python.hpp and reports a warning.
+# Prefer eigenpy's patched FindBoost module when it is available.
+set(EIGENPY_BOOST_CMAKE_DIR "/opt/ros/humble/lib/x86_64-linux-gnu/cmake/eigenpy/boost")
+if(EXISTS "${EIGENPY_BOOST_CMAKE_DIR}/FindBoost.cmake")
+  list(PREPEND CMAKE_MODULE_PATH "${EIGENPY_BOOST_CMAKE_DIR}")
+endif()
+
 find_package(pinocchio REQUIRED)
 
 find_package(tf2_ros REQUIRED)

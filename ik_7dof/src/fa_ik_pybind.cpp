@@ -29,7 +29,13 @@ ArmSide parseArmSide(const std::string& side)
     throw std::invalid_argument("arm_side must be 'left' or 'right'");
 }
 
-ArmKinematicsOptions parseOptions(const std::string& reference_frame)
+ArmKinematicsOptions parseOptions(
+    const std::string& reference_frame,
+    bool skip_svd_fallback = false,
+    double position_weight = 1.0,
+    double orientation_weight = 1.0,
+    double acceptable_position_error = 0.05,
+    double acceptable_orientation_error = 0.05)
 {
     ArmKinematicsOptions options;
     if (reference_frame == "pelvis") {
@@ -39,6 +45,11 @@ ArmKinematicsOptions parseOptions(const std::string& reference_frame)
     } else {
         throw std::invalid_argument("reference_frame must be 'pelvis' or 'arm_base'");
     }
+    options.skip_svd_fallback = skip_svd_fallback;
+    options.position_weight = position_weight;
+    options.orientation_weight = orientation_weight;
+    options.acceptable_position_error = acceptable_position_error;
+    options.acceptable_orientation_error = acceptable_orientation_error;
     return options;
 }
 
@@ -133,14 +144,25 @@ public:
         const std::vector<double>& initial_q,
         const std::string& reference_frame,
         int max_iters,
-        double eps)
+        double eps,
+        bool skip_svd_fallback,
+        double position_weight,
+        double orientation_weight,
+        double acceptable_position_error,
+        double acceptable_orientation_error)
     {
         const Eigen::Vector3d translation = vector3FromObject(translation_obj, "translation");
         const Eigen::Matrix3d rotation = matrix3FromObject(rotation_obj, "rotation");
         pinocchio::SE3 target(rotation, translation);
 
         const auto side = parseArmSide(arm_side);
-        const auto options = parseOptions(reference_frame);
+        const auto options = parseOptions(
+            reference_frame,
+            skip_svd_fallback,
+            position_weight,
+            orientation_weight,
+            acceptable_position_error,
+            acceptable_orientation_error);
         Eigen::VectorXd q_init = vectorFromStd(initial_q, "initial_q", true);
 
         const auto start = std::chrono::steady_clock::now();
@@ -199,7 +221,12 @@ PYBIND11_MODULE(ik_7dof_pybind, m)
              py::arg("initial_q"),
              py::arg("reference_frame") = "pelvis",
              py::arg("max_iters") = 200,
-             py::arg("eps") = 1e-3)
+             py::arg("eps") = 1e-3,
+             py::arg("skip_svd_fallback") = false,
+             py::arg("position_weight") = 1.0,
+             py::arg("orientation_weight") = 1.0,
+             py::arg("acceptable_position_error") = 0.05,
+             py::arg("acceptable_orientation_error") = 0.05)
         .def("compute_arm_fk", &PyFaIkSolver::computeArmFk,
              py::arg("q"),
              py::arg("arm_side"),

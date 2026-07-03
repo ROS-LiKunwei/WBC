@@ -332,12 +332,27 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         VectorXd err = err_motion.toVector(); // 6维向量: [v_x, v_y, v_z, w_x, w_y, w_z]
 
         double error_norm = err.norm();
+        const double position_weight = std::max(0.0, options.position_weight);
+        const double orientation_weight = std::max(0.0, options.orientation_weight);
+        Eigen::VectorXd weights(6);
+        if (error_norm > 0.01) {
+            // 第一阶段：粗调。位置保持完整权重，姿态先弱约束。
+            // 优先把末端拉到目标点附近，避免姿态奇异点把冗余臂带到伸直/坏分支。
+            weights << position_weight, position_weight, position_weight,
+                0.4 * orientation_weight, 0.4 * orientation_weight, 0.4 * orientation_weight;
+        } else {
+            // 第二阶段：精调。位置已接近 1cm 内后恢复姿态权重。
+            // 精细操作中姿态和位置同样重要，最终收敛不能长期弱化姿态项。
+            weights << position_weight, position_weight, position_weight,
+                orientation_weight, orientation_weight, orientation_weight;
+        }
+        double weighted_error_norm = err.cwiseProduct(weights).norm();
         double position_error = err.head<3>().norm();
         double orientation_error = err.tail<3>().norm();
 
         // 记录当前迭代中误差最小的关节角，目标不可达时返回这个最优近似解。
-        if (error_norm < best_error_norm) {
-            best_error_norm = error_norm;
+        if (weighted_error_norm < best_error_norm) {
+            best_error_norm = weighted_error_norm;
             for (int i = 0; i < n_arm; ++i) {
                 best_q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             }
@@ -345,9 +360,12 @@ Eigen::VectorXd IKSolver::solveIK_Core(
 
         // 在线遥操作分两级判定：
         // 精确解：位置 <= 5mm 且姿态 <= 0.05rad。
-        // 可用近似解：位置 <= 5cm 且姿态 <= 0.05rad，立即返回以保证实时性和连续性。
+        // 可用近似解：默认位置 <= 5cm 且姿态 <= 0.05rad。
+        // 在线遥操作可通过 options 放宽姿态阈值，实现位置优先、姿态弱约束。
         const bool exact_reached = position_error <= 0.005 && orientation_error <= 0.05;
-        const bool acceptable_reached = position_error <= 0.05 && orientation_error <= 0.05;
+        const bool acceptable_reached =
+            position_error <= std::max(0.0, options.acceptable_position_error)
+            && orientation_error <= std::max(0.0, options.acceptable_orientation_error);
         if (exact_reached || (acceptable_reached && iter > 0)) {
             VectorXd res(n_arm);
             for (int i = 0; i < n_arm; ++i)
@@ -364,18 +382,6 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             return res;
         }
 
-        // --- 动态权重分配 ---
-        Eigen::VectorXd weights(6);
-        
-        if (error_norm > 0.01) {
-            // 第一阶段：粗调。位置权重1.0，姿态权重0.4。
-            // 优先让手臂伸到目标点附近，防止姿态奇异点把手臂带飞。
-            weights << 1.0, 1.0, 1.0, 0.4, 0.4, 0.4;
-        }else {
-            // 第二阶段：精调。恢复 1:1 的权重。
-            // 当位置已经很接近了（< 1cm），必须恢复姿态权重，否则 1e-3 的精度永远达不到。
-            weights << 1.0, 1.0, 1.0, 1.0, 1.0, 1.0;
-        }
         // 应用权重
         VectorXd weighted_err = err.cwiseProduct(weights); // coefficient-wise product，逐元素对应相乘，并生成一个新的同维度向量
 
@@ -394,19 +400,44 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         grad_H.setZero(); 
         double repulsion_gain = 0.0;
         
-        // 只有在误差较大时才施加斥力&&舒适姿态拉力，避免干扰最后 1e-3 精度的精调收敛
-        if (error_norm >= 1e-2) { 
+        // 奇异感知：计算雅可比矩阵的最小奇异值，在奇异位形时减小零空间拉力
+        // 避免零空间坍缩时舒适拉力泄漏到任务空间导致抖动
+        double singularity_scale = 1.0;
+        {
+            Eigen::JacobiSVD<Eigen::MatrixXd> svd(J_arm);
+            Eigen::VectorXd sv = svd.singularValues();
+            double min_sv = sv.minCoeff();
+            double singularity_threshold = 0.05;
+            singularity_scale = std::min(1.0, min_sv / singularity_threshold);
+        }
+        
+        // 平滑启停零空间项，避免 error_norm 在阈值附近来回穿越时突然开/关导致抖动。
+        // 3cm 内基本关闭，8cm 外完全启用，中间用 smoothstep 连续过渡。
+        const double nullspace_ramp_start = 3e-2;
+        const double nullspace_ramp_end = 8e-2;
+        double nullspace_activation = 0.0;
+        if (error_norm >= nullspace_ramp_end) {
+            nullspace_activation = 1.0;
+        } else if (error_norm > nullspace_ramp_start) {
+            const double t = (error_norm - nullspace_ramp_start)
+                / (nullspace_ramp_end - nullspace_ramp_start);
+            nullspace_activation = t * t * (3.0 - 2.0 * t);
+        }
+
+        if (nullspace_activation > 0.0) {
             auto limits = getArmJointLimits(arm_side);
             VectorXd q_arm(n_arm);
             for(int i=0; i<n_arm; ++i){
                 q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             } 
 
-            // 遥操作中仍优先保持当前 IK 分支，但给零空间留出一部分
-            // 中间姿态偏置，避免肘/腕长期贴着硬限位运行。
-            const double continuity_weight = 0.8;
-            VectorXd q_mid = 0.5 * (limits.first + limits.second);
-            VectorXd q_rest = continuity_weight * q_init + (1.0 - continuity_weight) * q_mid;
+            // 零空间舒适关节角度
+            VectorXd q_rest(n_arm);
+            if (arm_side == ArmSide::RIGHT) {
+                q_rest << -0.5, 0.5, 0.5, -0.5, 0.5, 0.0, 0.0;
+            } else {
+                q_rest << -0.5, 0.5, -0.5, -0.5, 0.5, 0.0, 0.0;
+            }
             // rest 姿态拉力保持较小，主要作用是缓慢离开不舒服构型。
             double k_rest = 0.08;
 
@@ -429,8 +460,9 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                     limit_repulsion = limit_gain * x * x;
                 }
                 
-                // 计算混合 rest 姿态拉力 (低优)
-                double comfort_pull = -k_rest * (q_arm[i] - q_rest[i]);
+                // 计算饱和舒适姿态拉力 (低优)
+                // 使用 tanh 函数代替线性函数，限制最大拉力，避免抖动
+                double comfort_pull = -k_rest * std::tanh(2.0 * (q_arm[i] - q_rest[i]));
 
                 // 叠加梯度：当靠近限位时，limit_repulsion 会急剧变大，掩盖住 rest 姿态拉力
                 grad_H[i] = limit_repulsion + comfort_pull;
@@ -441,7 +473,7 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             for(int i=0; i<n_arm; ++i) 
                 grad_H[i] = std::max(-max_grad, std::min(max_grad, grad_H[i]));
 
-            repulsion_gain = (error_norm < 0.02) ? 0.01 : 0.05;
+            repulsion_gain = nullspace_activation * singularity_scale * 0.05;
         }
 
         // 基础斥力向量
@@ -569,9 +601,9 @@ IKResult IKSolver::solveArmIK(
         best_approx = result;
     }
 
-    // 实时遥操作使用很小的 max_iters 时，优先返回当前连续初值附近的近似解。
-    // 继续进入 SVD 稳健阶段可能跳到另一组等价 IK 分支，表现为手臂突然卡住或大幅跳变。
-    if (per_stage_iter_budget <= 10 && best_approx.size() > 0) {
+    // 实时遥操作可以显式跳过 SVD fallback，优先返回当前连续初值附近的 LDLT 近似解。
+    // SVD 更稳健，但可能跳到另一组等价 IK 分支，表现为手臂突然卡住或大幅跳变。
+    if ((options.skip_svd_fallback || per_stage_iter_budget <= 10) && best_approx.size() > 0) {
         stats_.total_failures++;
         ik_result.success = false;
         ik_result.has_solution = true;
