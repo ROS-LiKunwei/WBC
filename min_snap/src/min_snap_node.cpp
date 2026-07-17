@@ -39,6 +39,13 @@ ArmArray to_arm_array(const std::vector<double> & values)
   return out;
 }
 
+NeckArray to_neck_array(const std::vector<double> & values)
+{
+  NeckArray out{};
+  std::copy_n(values.begin(), std::min(values.size(), out.size()), out.begin());
+  return out;
+}
+
 std::string format_double(double value)
 {
   if (!std::isfinite(value)) {
@@ -81,6 +88,37 @@ std::string format_arm_actual(
   return stream.str();
 }
 
+std::string format_neck(const NeckArray & values)
+{
+  std::ostringstream stream;
+  stream << "[";
+  for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << format_double(values[i]);
+  }
+  stream << "]";
+  return stream.str();
+}
+
+std::string format_neck_actual(
+  const std::unordered_map<std::string, double> & values,
+  const std::array<std::string, kNeckJointCount> & names)
+{
+  std::ostringstream stream;
+  stream << "[";
+  for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+    if (i > 0) {
+      stream << ",";
+    }
+    const auto it = values.find(names[i]);
+    stream << (it == values.end() ? "nan" : format_double(it->second));
+  }
+  stream << "]";
+  return stream.str();
+}
+
 double max_abs_error(
   const std::unordered_map<std::string, double> & actual,
   const std::array<std::string, kArmJointCount> & names,
@@ -97,9 +135,29 @@ double max_abs_error(
   return out;
 }
 
+double max_abs_neck_error(
+  const NeckArray & actual,
+  const NeckArray & desired)
+{
+  double out = 0.0;
+  for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+    if (std::isfinite(actual[i])) {
+      out = std::max(out, std::abs(actual[i] - desired[i]));
+    }
+  }
+  return out;
+}
+
 ArmArray make_arm_array(const std::array<double, kArmJointCount> & values)
 {
   ArmArray out{};
+  std::copy(values.begin(), values.end(), out.begin());
+  return out;
+}
+
+NeckArray make_neck_array(const std::array<double, kNeckJointCount> & values)
+{
+  NeckArray out{};
   std::copy(values.begin(), values.end(), out.begin());
   return out;
 }
@@ -112,7 +170,8 @@ public:
   MinSnapNode()
   : Node("min_snap_node"),
     left_planner_("left"),
-    right_planner_("right")
+    right_planner_("right"),
+    neck_planner_("neck")
   {
     load_parameters();
     open_run_log();
@@ -261,8 +320,10 @@ private:
   {
     std::array<bool, kArmJointCount> left_seen{};
     std::array<bool, kArmJointCount> right_seen{};
+    std::array<bool, kNeckJointCount> neck_seen{};
     latest_left_velocities_ = ArmArray{};
     latest_right_velocities_ = ArmArray{};
+    latest_neck_velocities_ = NeckArray{};
     if (recorder_.enabled()) {
       latest_positions_.clear();
       latest_velocities_.clear();
@@ -273,7 +334,7 @@ private:
       const bool known_joint = slot_it != joint_state_name_slots_.end();
       if (i < msg.position.size()) {
         if (known_joint) {
-          set_cached_joint_position(slot_it->second, msg.position[i], left_seen, right_seen);
+          set_cached_joint_position(slot_it->second, msg.position[i], left_seen, right_seen, neck_seen);
         }
         if (recorder_.enabled()) {
           latest_positions_[msg.name[i]] = msg.position[i];
@@ -320,6 +381,13 @@ private:
         break;
       }
     }
+    has_neck_joint_state_ = true;
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      if (!neck_seen[i]) {
+        has_neck_joint_state_ = false;
+        break;
+      }
+    }
     if (!has_arm_joint_state_) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
@@ -352,12 +420,17 @@ private:
       return;
     }
 
-    ArmArray left_goal = to_arm_array(msg.left_arm_target_rad);
-    ArmArray right_goal = to_arm_array(msg.right_arm_target_rad);
+    const bool left_target_provided = !msg.left_arm_target_rad.empty();
+    const bool right_target_provided = !msg.right_arm_target_rad.empty();
+    const bool neck_target_provided = !msg.neck_target_rad.empty();
+    ArmArray left_goal = left_target_provided ? to_arm_array(msg.left_arm_target_rad) : latest_left_positions_;
+    ArmArray right_goal = right_target_provided ? to_arm_array(msg.right_arm_target_rad) : latest_right_positions_;
+    NeckArray neck_goal = neck_target_provided ? to_neck_array(msg.neck_target_rad) : latest_neck_position_;
     clamp_goal_to_joint_limits(left_goal, "left");
     clamp_goal_to_joint_limits(right_goal, "right");
+    clamp_goal_to_neck_limits(neck_goal);
     ++target_sequence_;
-    if (target_delta_below_threshold(left_goal, right_goal)) {
+    if (target_delta_below_threshold(left_goal, right_goal, neck_goal)) {
       return;
     }
 
@@ -367,9 +440,12 @@ private:
     ArmArray start_right_pos{};
     ArmArray start_right_vel{};
     ArmArray start_right_acc{};
+    NeckArray start_neck_pos{};
+    NeckArray start_neck_vel{};
+    NeckArray start_neck_acc{};
 
     const auto now_time = now();
-    const bool replanning = left_planner_.active() || right_planner_.active();
+    const bool replanning = left_planner_.active() || right_planner_.active() || neck_planner_.active();
     if (replanning && last_plan_time_.nanoseconds() != 0 &&
       (now_time - last_plan_time_).seconds() < std::max(0.0, min_replan_interval_s_))
     {
@@ -377,7 +453,9 @@ private:
     }
 
     if (replan_from_joint_state_ || !replanning) {
-      if (!start_from_joint_state(start_left_pos, start_left_vel, start_right_pos, start_right_vel)) {
+      if (!start_from_joint_state(
+          start_left_pos, start_left_vel, start_right_pos, start_right_vel, start_neck_pos, start_neck_vel))
+      {
         RCLCPP_WARN(get_logger(), "Rejecting /min_snap/target: cannot build start state from /joint_states");
         write_run_log("target_rejected seq=" + std::to_string(target_sequence_) + " reason=cannot_build_start_state");
         return;
@@ -386,8 +464,10 @@ private:
       const double elapsed = (now_time - trajectory_start_time_).seconds();
       auto left_sample = left_planner_.sample(elapsed);
       auto right_sample = right_planner_.sample(elapsed);
+      auto neck_sample = neck_planner_.active() ? neck_planner_.sample(elapsed) : NeckTrajectorySample{};
       if (!clamp_sample_to_publish_limits(left_sample, "left_replan_start") ||
-        !clamp_sample_to_publish_limits(right_sample, "right_replan_start"))
+        !clamp_sample_to_publish_limits(right_sample, "right_replan_start") ||
+        (neck_planning_enabled() && !clamp_neck_sample_to_publish_limits(neck_sample, "neck_replan_start")))
       {
         deactivate_trajectories("invalid_replan_start_state");
         return;
@@ -398,6 +478,24 @@ private:
       start_right_pos = right_sample.position;
       start_right_vel = right_sample.velocity;
       start_right_acc = right_sample.acceleration;
+      start_neck_pos = neck_planner_.active() ? neck_sample.position : latest_neck_position_;
+      start_neck_vel = neck_planner_.active() ? neck_sample.velocity : latest_neck_velocities_;
+      start_neck_acc = neck_planner_.active() ? neck_sample.acceleration : NeckArray{};
+    }
+    if (!left_target_provided) {
+      start_left_pos = latest_left_positions_;
+      start_left_vel = use_joint_state_velocity_ ? latest_left_velocities_ : ArmArray{};
+      start_left_acc = ArmArray{};
+    }
+    if (!right_target_provided) {
+      start_right_pos = latest_right_positions_;
+      start_right_vel = use_joint_state_velocity_ ? latest_right_velocities_ : ArmArray{};
+      start_right_acc = ArmArray{};
+    }
+    if (!neck_target_provided) {
+      start_neck_pos = latest_neck_position_;
+      start_neck_vel = use_joint_state_velocity_ ? latest_neck_velocities_ : NeckArray{};
+      start_neck_acc = NeckArray{};
     }
 
     const double expected_duration =
@@ -408,15 +506,20 @@ private:
       msg.max_acceleration_rad_s2 > 0.0 ? msg.max_acceleration_rad_s2 : default_max_acceleration_rad_s2_;
     clamp_start_velocity_to_limit(start_left_vel, max_velocity, "left");
     clamp_start_velocity_to_limit(start_right_vel, max_velocity, "right");
+    clamp_neck_start_velocity_to_limit(start_neck_vel, max_velocity);
 
     double left_duration = 0.0;
     double right_duration = 0.0;
+    double neck_duration = 0.0;
     bool left_extended = false;
     bool right_extended = false;
+    bool neck_extended = false;
     const ArmArray left_lower = soft_lower_limits(left_lower_limits_, left_upper_limits_);
     const ArmArray left_upper = soft_upper_limits(left_lower_limits_, left_upper_limits_);
     const ArmArray right_lower = soft_lower_limits(right_lower_limits_, right_upper_limits_);
     const ArmArray right_upper = soft_upper_limits(right_lower_limits_, right_upper_limits_);
+    const NeckArray neck_lower = soft_neck_lower_limits();
+    const NeckArray neck_upper = soft_neck_upper_limits();
     const auto plan_start_time = std::chrono::steady_clock::now();
     const auto left_plan_start_time = std::chrono::steady_clock::now();
     const bool left_ok = left_planner_.plan(
@@ -426,32 +529,43 @@ private:
     const bool right_ok = right_planner_.plan(
       start_right_pos, start_right_vel, start_right_acc, right_goal, expected_duration,
       max_velocity, max_acceleration, right_lower, right_upper, planner_config_, &right_duration, &right_extended);
+    const auto neck_plan_start_time = std::chrono::steady_clock::now();
+    const bool neck_ok = !neck_planning_enabled() || neck_planner_.plan(
+      start_neck_pos, start_neck_vel, start_neck_acc, neck_goal, expected_duration,
+      max_velocity, max_acceleration, neck_lower, neck_upper, planner_config_, &neck_duration, &neck_extended);
     const auto plan_end_time = std::chrono::steady_clock::now();
     const double left_plan_ms = std::chrono::duration<double, std::milli>(
       right_plan_start_time - left_plan_start_time).count();
     const double right_plan_ms = std::chrono::duration<double, std::milli>(
-      plan_end_time - right_plan_start_time).count();
+      neck_plan_start_time - right_plan_start_time).count();
+    const double neck_plan_ms = std::chrono::duration<double, std::milli>(
+      plan_end_time - neck_plan_start_time).count();
     const double total_plan_ms = std::chrono::duration<double, std::milli>(
       plan_end_time - plan_start_time).count();
 
-    if (!left_ok || !right_ok) {
+    if (!left_ok || !right_ok || !neck_ok) {
       RCLCPP_ERROR(
         get_logger(),
-        "Failed to generate min-snap trajectory: plan_time_ms total=%.3f left=%.3f right=%.3f",
-        total_plan_ms, left_plan_ms, right_plan_ms);
+        "Failed to generate min-snap trajectory: plan_time_ms total=%.3f left=%.3f right=%.3f neck=%.3f",
+        total_plan_ms, left_plan_ms, right_plan_ms, neck_plan_ms);
       write_run_log(
         "Failed to generate min-snap trajectory: seq=" + std::to_string(target_sequence_) +
         " plan_time_ms_total=" + format_double(total_plan_ms) +
         " plan_time_ms_left=" + format_double(left_plan_ms) +
         " plan_time_ms_right=" + format_double(right_plan_ms) +
+        " plan_time_ms_neck=" + format_double(neck_plan_ms) +
         " left_ok=" + std::string(left_ok ? "true" : "false") +
         " right_ok=" + std::string(right_ok ? "true" : "false") +
+        " neck_ok=" + std::string(neck_ok ? "true" : "false") +
         " left_reason=" + left_planner_.last_failure_reason() +
         " right_reason=" + right_planner_.last_failure_reason() +
+        " neck_reason=" + neck_planner_.last_failure_reason() +
         " start_left_pos=" + format_arm(start_left_pos, active_arm_joint_count_) +
         " start_right_pos=" + format_arm(start_right_pos, active_arm_joint_count_) +
+        " start_neck_pos=" + format_neck(start_neck_pos) +
         " left_goal=" + format_arm(left_goal, active_arm_joint_count_) +
-        " right_goal=" + format_arm(right_goal, active_arm_joint_count_),
+        " right_goal=" + format_arm(right_goal, active_arm_joint_count_) +
+        " neck_goal=" + format_neck(neck_goal),
         "ERROR");
       deactivate_trajectories("plan_failed");
       return;
@@ -462,13 +576,14 @@ private:
     goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     latest_left_goal_ = left_goal;
     latest_right_goal_ = right_goal;
+    latest_neck_goal_ = neck_goal;
     has_goal_ = true;
     if (!trajectory_publish_paused_) {
       timer_->reset();
     }
 
-    const double final_duration = std::max(left_duration, right_duration);
-    if (left_extended || right_extended || final_duration > expected_duration + 1e-9) {
+    const double final_duration = std::max({left_duration, right_duration, neck_duration});
+    if (left_extended || right_extended || neck_extended || final_duration > expected_duration + 1e-9) {
       RCLCPP_WARN(
         get_logger(),
         "Requested duration %.3f s violates velocity/acceleration limits. Extended trajectory duration to %.3f s.",
@@ -484,12 +599,15 @@ private:
       " total_ms=" + format_double(total_plan_ms) +
       " left_ms=" + format_double(left_plan_ms) +
       " right_ms=" + format_double(right_plan_ms) +
+      " neck_ms=" + format_double(neck_plan_ms) +
       " expected_duration_s=" + format_double(expected_duration) +
       " final_duration_s=" + format_double(final_duration) +
       " left_duration_s=" + format_double(left_duration) +
       " right_duration_s=" + format_double(right_duration) +
+      " neck_duration_s=" + format_double(neck_duration) +
       " left_extended=" + std::string(left_extended ? "true" : "false") +
-      " right_extended=" + std::string(right_extended ? "true" : "false"));
+      " right_extended=" + std::string(right_extended ? "true" : "false") +
+      " neck_extended=" + std::string(neck_extended ? "true" : "false"));
     if (replanning) {
       RCLCPP_INFO(get_logger(), "Replanned min-snap trajectory from active trajectory state.");
       write_run_log("Replanned min-snap trajectory from active trajectory state.");
@@ -501,18 +619,29 @@ private:
 
   bool validate_target(const min_snap::msg::MinSnapTarget & msg)
   {
-    if (msg.left_arm_target_rad.size() < active_arm_joint_count_ ||
-      msg.right_arm_target_rad.size() < active_arm_joint_count_ ||
-      msg.left_arm_target_rad.size() > kArmJointCount ||
-      msg.right_arm_target_rad.size() > kArmJointCount)
+    const auto arm_target_size_valid = [this](const std::vector<double> & target) {
+        return target.empty() ||
+        (target.size() >= active_arm_joint_count_ && target.size() <= kArmJointCount);
+      };
+    if (!arm_target_size_valid(msg.left_arm_target_rad) || !arm_target_size_valid(msg.right_arm_target_rad))
     {
       RCLCPP_ERROR(
-        get_logger(), "Rejecting target: left/right target arrays must have %zu to 7 values",
+        get_logger(), "Rejecting target: left/right target arrays must be empty or have %zu to 7 values",
         active_arm_joint_count_);
       return false;
     }
     if (!finite_vector(msg.left_arm_target_rad) || !finite_vector(msg.right_arm_target_rad)) {
       RCLCPP_ERROR(get_logger(), "Rejecting target: target contains NaN or Inf");
+      return false;
+    }
+    if (!msg.neck_target_rad.empty() && msg.neck_target_rad.size() != kNeckJointCount) {
+      RCLCPP_ERROR(
+        get_logger(), "Rejecting target: neck_target_rad must be empty or have %zu values",
+        kNeckJointCount);
+      return false;
+    }
+    if (!finite_vector(msg.neck_target_rad)) {
+      RCLCPP_ERROR(get_logger(), "Rejecting target: neck target contains NaN or Inf");
       return false;
     }
     if (msg.max_velocity_rad_s <= 0.0 || !std::isfinite(msg.max_velocity_rad_s)) {
@@ -531,7 +660,10 @@ private:
     return true;
   }
 
-  bool target_delta_below_threshold(const ArmArray & left_goal, const ArmArray & right_goal) const
+  bool target_delta_below_threshold(
+    const ArmArray & left_goal,
+    const ArmArray & right_goal,
+    const NeckArray & neck_goal) const
   {
     if (!has_goal_) {
       return false;
@@ -541,6 +673,11 @@ private:
       max_delta = std::max(max_delta, std::abs(left_goal[i] - latest_left_goal_[i]));
       max_delta = std::max(max_delta, std::abs(right_goal[i] - latest_right_goal_[i]));
     }
+    if (neck_planning_enabled()) {
+      for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+        max_delta = std::max(max_delta, std::abs(neck_goal[i] - latest_neck_goal_[i]));
+      }
+    }
     return max_delta < replan_threshold_rad_;
   }
 
@@ -548,7 +685,9 @@ private:
     ArmArray & left_pos,
     ArmArray & left_vel,
     ArmArray & right_pos,
-    ArmArray & right_vel) const
+    ArmArray & right_vel,
+    NeckArray & neck_pos,
+    NeckArray & neck_vel) const
   {
     if (!has_arm_joint_state_) {
       return false;
@@ -557,7 +696,14 @@ private:
     right_pos = latest_right_positions_;
     left_vel = use_joint_state_velocity_ ? latest_left_velocities_ : ArmArray{};
     right_vel = use_joint_state_velocity_ ? latest_right_velocities_ : ArmArray{};
+    neck_pos = latest_neck_position_;
+    neck_vel = use_joint_state_velocity_ ? latest_neck_velocities_ : NeckArray{};
     return true;
+  }
+
+  bool neck_planning_enabled() const
+  {
+    return robot_type_ == "fa";
   }
 
   bool extract_active_arm_positions(
@@ -599,7 +745,8 @@ private:
     trajectory_publish_paused_ = true;
     deactivate_trajectories("pause_publish_service");
 
-    const bool publish_stopped = trajectory_publish_paused_ && !left_planner_.active() && !right_planner_.active();
+    const bool publish_stopped =
+      trajectory_publish_paused_ && !left_planner_.active() && !right_planner_.active() && !neck_planner_.active();
     response->success = publish_stopped;
     response->message = publish_stopped ?
       "min_snap trajectory point publishing is paused" :
@@ -631,7 +778,9 @@ private:
     if (trajectory_publish_paused_) {
       return;
     }
-    if (!left_planner_.active() || !right_planner_.active()) {
+    if (!left_planner_.active() || !right_planner_.active() ||
+      (neck_planning_enabled() && !neck_planner_.active()))
+    {
       return;
     }
     if (require_joint_state_before_start_ && !joint_state_fresh()) {
@@ -645,21 +794,21 @@ private:
     const double elapsed = (now_time - trajectory_start_time_).seconds();
     auto left = left_planner_.sample(elapsed);
     auto right = right_planner_.sample(elapsed);
+    auto neck_sample = neck_planner_.sample(elapsed);
     if (!clamp_sample_to_publish_limits(left, "left_publish") ||
-      !clamp_sample_to_publish_limits(right, "right_publish"))
+      !clamp_sample_to_publish_limits(right, "right_publish") ||
+      (neck_planning_enabled() && !clamp_neck_sample_to_publish_limits(neck_sample, "neck_publish")))
     {
       deactivate_trajectories("invalid_publish_sample");
       return;
     }
-    const NeckArray neck = latest_neck_position_;
-
     if (robot_type_ == "sysmo32") {
       command_pub_->publish(
         make_sysmo32_command(left.position, right.position, speed_mode_, reserved_, neck_joint_));
       desired_joint_state_pub_->publish(make_sysmo32_desired_joint_state(
         now_time, left.position, right.position, left.velocity, right.velocity));
     } else {
-      fill_upper_position_velocity(left, right, neck, reusable_desired_position_, reusable_desired_velocity_);
+      fill_upper_position_velocity(left, right, neck_sample, reusable_desired_position_, reusable_desired_velocity_);
       publish_reusable_fa_messages(now_time);
     }
 
@@ -668,18 +817,22 @@ private:
       UpperArray desired_velocity{};
       UpperArray desired_acceleration{};
       UpperArray desired_jerk{};
-      fill_upper_arrays(left, right, neck, desired_position, desired_velocity, desired_acceleration, desired_jerk);
+      fill_upper_arrays(
+        left, right, neck_sample, desired_position, desired_velocity, desired_acceleration, desired_jerk);
       recorder_.record(
         now_time.seconds(), latest_positions_, latest_velocities_, desired_position, desired_velocity,
         desired_acceleration, desired_jerk);
     }
 
+    log_publish_sample(elapsed, left, right, neck_sample);
     maybe_deactivate_completed_trajectory(now_time, elapsed);
   }
 
   void maybe_deactivate_completed_trajectory(const rclcpp::Time & now_time, double elapsed)
   {
-    if (!left_planner_.finished(elapsed) || !right_planner_.finished(elapsed)) {
+    if (!left_planner_.finished(elapsed) || !right_planner_.finished(elapsed) ||
+      (neck_planning_enabled() && !neck_planner_.finished(elapsed)))
+    {
       goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
       return;
     }
@@ -699,11 +852,15 @@ private:
       goal_reached_position_tolerance_rad_ : 0.0;
     double left_error = 0.0;
     double right_error = 0.0;
+    double neck_error = 0.0;
     for (std::size_t i = 0; i < active_arm_joint_count_; ++i) {
       left_error = std::max(left_error, std::abs(actual_left[i] - left_planner_.goal()[i]));
       right_error = std::max(right_error, std::abs(actual_right[i] - right_planner_.goal()[i]));
     }
-    const double max_error = std::max(left_error, right_error);
+    if (neck_planning_enabled() && has_neck_joint_state_) {
+      neck_error = max_abs_neck_error(latest_neck_position_, neck_planner_.goal());
+    }
+    const double max_error = std::max({left_error, right_error, neck_error});
     if (max_error > tolerance) {
       goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
       return;
@@ -721,13 +878,14 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "Min-snap target reached; deactivating trajectory. left_err=%.6f right_err=%.6f tolerance=%.6f",
-      left_error, right_error, tolerance);
+      "Min-snap target reached; deactivating trajectory. left_err=%.6f right_err=%.6f neck_err=%.6f tolerance=%.6f",
+      left_error, right_error, neck_error, tolerance);
     write_run_log(
       "trajectory_completed target_seq=" + std::to_string(target_sequence_) +
       " elapsed_s=" + format_double(elapsed) +
       " left_max_abs_err=" + format_double(left_error) +
       " right_max_abs_err=" + format_double(right_error) +
+      " neck_max_abs_err=" + format_double(neck_error) +
       " tolerance=" + format_double(tolerance));
     deactivate_trajectories("target_reached");
   }
@@ -794,6 +952,66 @@ private:
     return true;
   }
 
+  bool clamp_neck_sample_to_publish_limits(NeckTrajectorySample & sample, const std::string & label)
+  {
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      if (!std::isfinite(sample.position[i]) ||
+        std::abs(sample.position[i]) > publish_position_abs_limit_rad_)
+      {
+        RCLCPP_ERROR(
+          get_logger(),
+          "Refusing min-snap %s: neck joint %zu position %.6f exceeds abs limit %.6f",
+          label.c_str(), i, sample.position[i], publish_position_abs_limit_rad_);
+        write_run_log(
+          "safety_stop label=" + label +
+          " reason=position_limit joint=" + std::to_string(i) +
+          " value=" + format_double(sample.position[i]) +
+          " limit=" + format_double(publish_position_abs_limit_rad_),
+          "ERROR");
+        return false;
+      }
+      const double clamped_position = std::clamp(sample.position[i], neck_lower_limits_[i], neck_upper_limits_[i]);
+      if (clamped_position != sample.position[i]) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "Clamped min-snap %s neck joint %zu from %.6f to %.6f within hard limits [%.6f, %.6f]",
+          label.c_str(), i, sample.position[i], clamped_position, neck_lower_limits_[i], neck_upper_limits_[i]);
+        sample.position[i] = clamped_position;
+      }
+      if (!std::isfinite(sample.velocity[i]) ||
+        std::abs(sample.velocity[i]) > publish_velocity_abs_limit_rad_s_)
+      {
+        RCLCPP_ERROR(
+          get_logger(),
+          "Refusing min-snap %s: neck joint %zu velocity %.6f exceeds abs limit %.6f",
+          label.c_str(), i, sample.velocity[i], publish_velocity_abs_limit_rad_s_);
+        write_run_log(
+          "safety_stop label=" + label +
+          " reason=velocity_limit joint=" + std::to_string(i) +
+          " value=" + format_double(sample.velocity[i]) +
+          " limit=" + format_double(publish_velocity_abs_limit_rad_s_),
+          "ERROR");
+        return false;
+      }
+      if (!std::isfinite(sample.acceleration[i]) ||
+        std::abs(sample.acceleration[i]) > publish_acceleration_abs_limit_rad_s2_)
+      {
+        RCLCPP_ERROR(
+          get_logger(),
+          "Refusing min-snap %s: neck joint %zu acceleration %.6f exceeds abs limit %.6f",
+          label.c_str(), i, sample.acceleration[i], publish_acceleration_abs_limit_rad_s2_);
+        write_run_log(
+          "safety_stop label=" + label +
+          " reason=acceleration_limit joint=" + std::to_string(i) +
+          " value=" + format_double(sample.acceleration[i]) +
+          " limit=" + format_double(publish_acceleration_abs_limit_rad_s2_),
+          "ERROR");
+        return false;
+      }
+    }
+    return true;
+  }
+
   void clamp_goal_to_joint_limits(ArmArray & goal, const std::string & side)
   {
     const bool is_left = side == "left";
@@ -815,6 +1033,32 @@ private:
         write_run_log(
           "target_clamped side=" + side +
           " joint=" + std::to_string(i) +
+          " original=" + format_double(original) +
+          " clamped=" + format_double(goal[i]) +
+          " lower=" + format_double(soft_lower) +
+          " upper=" + format_double(soft_upper),
+          "WARN");
+      }
+    }
+  }
+
+  void clamp_goal_to_neck_limits(NeckArray & goal)
+  {
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      double soft_lower = neck_lower_limits_[i] + publish_joint_limit_margin_rad_;
+      double soft_upper = neck_upper_limits_[i] - publish_joint_limit_margin_rad_;
+      if (soft_lower > soft_upper) {
+        soft_lower = neck_lower_limits_[i];
+        soft_upper = neck_upper_limits_[i];
+      }
+      const double original = goal[i];
+      goal[i] = std::clamp(goal[i], soft_lower, soft_upper);
+      if (goal[i] != original) {
+        RCLCPP_WARN(
+          get_logger(), "Clamped neck target joint %zu from %.6f to %.6f within [%.6f, %.6f]",
+          i, original, goal[i], soft_lower, soft_upper);
+        write_run_log(
+          "target_clamped side=neck joint=" + std::to_string(i) +
           " original=" + format_double(original) +
           " clamped=" + format_double(goal[i]) +
           " lower=" + format_double(soft_lower) +
@@ -848,6 +1092,30 @@ private:
     return out;
   }
 
+  NeckArray soft_neck_lower_limits() const
+  {
+    NeckArray out{};
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      out[i] = neck_lower_limits_[i] + publish_joint_limit_margin_rad_;
+      if (out[i] > neck_upper_limits_[i] - publish_joint_limit_margin_rad_) {
+        out[i] = neck_lower_limits_[i];
+      }
+    }
+    return out;
+  }
+
+  NeckArray soft_neck_upper_limits() const
+  {
+    NeckArray out{};
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      out[i] = neck_upper_limits_[i] - publish_joint_limit_margin_rad_;
+      if (neck_lower_limits_[i] + publish_joint_limit_margin_rad_ > out[i]) {
+        out[i] = neck_upper_limits_[i];
+      }
+    }
+    return out;
+  }
+
   void clamp_start_velocity_to_limit(ArmArray & velocity, double max_velocity, const std::string & side)
   {
     for (std::size_t i = 0; i < active_arm_joint_count_; ++i) {
@@ -868,10 +1136,30 @@ private:
     }
   }
 
+  void clamp_neck_start_velocity_to_limit(NeckArray & velocity, double max_velocity)
+  {
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      const double original = velocity[i];
+      velocity[i] = std::clamp(velocity[i], -max_velocity, max_velocity);
+      if (velocity[i] != original) {
+        RCLCPP_WARN(
+          get_logger(), "Clamped neck start velocity joint %zu from %.6f to %.6f for max_velocity %.6f",
+          i, original, velocity[i], max_velocity);
+        write_run_log(
+          "start_velocity_clamped side=neck joint=" + std::to_string(i) +
+          " original=" + format_double(original) +
+          " clamped=" + format_double(velocity[i]) +
+          " max_velocity=" + format_double(max_velocity),
+          "WARN");
+      }
+    }
+  }
+
   void deactivate_trajectories(const std::string & reason)
   {
     left_planner_.deactivate();
     right_planner_.deactivate();
+    neck_planner_.deactivate();
     has_goal_ = false;
     goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     if (timer_) {
@@ -964,7 +1252,8 @@ private:
   void log_publish_sample(
     double elapsed,
     const ArmTrajectorySample & left,
-    const ArmTrajectorySample & right)
+    const ArmTrajectorySample & right,
+    const NeckTrajectorySample & neck)
   {
     if (!run_log_file_.is_open()) {
       return;
@@ -981,6 +1270,7 @@ private:
       latest_positions_, left_arm_joint_names(), left.position, active_arm_joint_count_);
     const double right_error = max_abs_error(
       latest_positions_, right_arm_joint_names(), right.position, active_arm_joint_count_);
+    const double neck_error = max_abs_neck_error(latest_neck_position_, neck.position);
     write_run_log(
       "publish seq=" + std::to_string(publish_sequence_) +
       " target_seq=" + std::to_string(target_sequence_) +
@@ -993,16 +1283,22 @@ private:
       " right_des_acc=" + format_arm(right.acceleration, active_arm_joint_count_) +
       " left_des_jerk=" + format_arm(left.jerk, active_arm_joint_count_) +
       " right_des_jerk=" + format_arm(right.jerk, active_arm_joint_count_) +
+      " neck_des_pos=" + format_neck(neck.position) +
+      " neck_des_vel=" + format_neck(neck.velocity) +
+      " neck_des_acc=" + format_neck(neck.acceleration) +
+      " neck_des_jerk=" + format_neck(neck.jerk) +
       " left_actual=" + format_arm_actual(latest_positions_, left_arm_joint_names(), active_arm_joint_count_) +
       " right_actual=" + format_arm_actual(latest_positions_, right_arm_joint_names(), active_arm_joint_count_) +
+      " neck_actual=" + format_neck_actual(latest_positions_, neck_joint_names()) +
       " left_max_abs_err=" + format_double(left_error) +
-      " right_max_abs_err=" + format_double(right_error));
+      " right_max_abs_err=" + format_double(right_error) +
+      " neck_max_abs_err=" + format_double(neck_error));
   }
 
   static void fill_upper_arrays(
     const ArmTrajectorySample & left,
     const ArmTrajectorySample & right,
-    const NeckArray & neck,
+    const NeckTrajectorySample & neck,
     UpperArray & position,
     UpperArray & velocity,
     UpperArray & acceleration,
@@ -1019,14 +1315,20 @@ private:
       acceleration[right_idx] = right.acceleration[i];
       jerk[right_idx] = right.jerk[i];
     }
-    position[14] = neck[0];
-    position[15] = neck[1];
+    position[14] = neck.position[0];
+    position[15] = neck.position[1];
+    velocity[14] = neck.velocity[0];
+    velocity[15] = neck.velocity[1];
+    acceleration[14] = neck.acceleration[0];
+    acceleration[15] = neck.acceleration[1];
+    jerk[14] = neck.jerk[0];
+    jerk[15] = neck.jerk[1];
   }
 
   static void fill_upper_position_velocity(
     const ArmTrajectorySample & left,
     const ArmTrajectorySample & right,
-    const NeckArray & neck,
+    const NeckTrajectorySample & neck,
     UpperArray & position,
     UpperArray & velocity)
   {
@@ -1037,10 +1339,10 @@ private:
       position[right_idx] = right.position[i];
       velocity[right_idx] = right.velocity[i];
     }
-    position[14] = neck[0];
-    position[15] = neck[1];
-    velocity[14] = 0.0;
-    velocity[15] = 0.0;
+    position[14] = neck.position[0];
+    position[15] = neck.position[1];
+    velocity[14] = neck.velocity[0];
+    velocity[15] = neck.velocity[1];
   }
 
   void initialize_reusable_messages()
@@ -1068,7 +1370,8 @@ private:
     std::size_t slot,
     double position,
     std::array<bool, kArmJointCount> & left_seen,
-    std::array<bool, kArmJointCount> & right_seen)
+    std::array<bool, kArmJointCount> & right_seen,
+    std::array<bool, kNeckJointCount> & neck_seen)
   {
     if (slot < kArmJointCount) {
       latest_left_positions_[slot] = position;
@@ -1081,6 +1384,7 @@ private:
       const std::size_t index = slot - 2 * kArmJointCount;
       if (index < kNeckJointCount) {
         latest_neck_position_[index] = position;
+        neck_seen[index] = true;
       }
     }
   }
@@ -1091,6 +1395,11 @@ private:
       latest_left_velocities_[slot] = velocity;
     } else if (slot < 2 * kArmJointCount) {
       latest_right_velocities_[slot - kArmJointCount] = velocity;
+    } else {
+      const std::size_t index = slot - 2 * kArmJointCount;
+      if (index < kNeckJointCount) {
+        latest_neck_velocities_[index] = velocity;
+      }
     }
   }
 
@@ -1151,6 +1460,8 @@ private:
   ArmArray left_upper_limits_{make_arm_array({2.79, 3.49, 2.79, 0.26, 2.79, 0.52, 1.57})};
   ArmArray right_lower_limits_{make_arm_array({-2.79, -3.49, -2.79, -1.40, -2.79, -0.52, -1.57})};
   ArmArray right_upper_limits_{make_arm_array({2.79, 0.33, 2.79, 0.26, 2.79, 0.52, 1.57})};
+  NeckArray neck_lower_limits_{make_neck_array({-1.57, -0.52})};
+  NeckArray neck_upper_limits_{make_neck_array({1.57, 0.79})};
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr command_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr desired_joint_state_pub_;
@@ -1162,6 +1473,7 @@ private:
 
   MinSnapArmPlanner left_planner_;
   MinSnapArmPlanner right_planner_;
+  MinSnapNeckPlanner neck_planner_;
   rclcpp::Time trajectory_start_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_joint_state_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};
@@ -1170,10 +1482,12 @@ private:
   rclcpp::Time last_publish_log_time_{0, 0, RCL_ROS_TIME};
   std::unordered_map<std::string, rclcpp::Time> last_warn_log_times_;
   bool has_arm_joint_state_{false};
+  bool has_neck_joint_state_{false};
   bool has_goal_{false};
   bool trajectory_publish_paused_{false};
   ArmArray latest_left_goal_{};
   ArmArray latest_right_goal_{};
+  NeckArray latest_neck_goal_{};
 
   std::unordered_map<std::string, double> latest_positions_;
   std::unordered_map<std::string, double> latest_velocities_;
@@ -1192,6 +1506,7 @@ private:
   ArmArray latest_left_velocities_{};
   ArmArray latest_right_velocities_{};
   NeckArray latest_neck_position_{0.0, 0.0};
+  NeckArray latest_neck_velocities_{0.0, 0.0};
 };
 
 }  // namespace min_snap

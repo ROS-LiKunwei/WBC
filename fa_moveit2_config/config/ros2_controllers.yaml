@@ -23,6 +23,10 @@ controller_manager:
       type: joint_trajectory_controller/JointTrajectoryController
 
 
+    neck_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -90,6 +94,16 @@ rightLeg_controller:
       - right_knee_joint
       - right_ankle_pitch_joint
       - right_ankle_roll_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+neck_controller:
+  ros__parameters:
+    joints:
+      - neck_yaw_joint
+      - neck_pitch_joint
     command_interfaces:
       - position
     state_interfaces:

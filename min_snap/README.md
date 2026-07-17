@@ -5,7 +5,7 @@
 本包不包含 IK、VR 手势解析或 beavr-bot 内部逻辑。它只处理：
 
 ```text
-左右臂 7+7 关节目标 -> minimum snap 轨迹 -> 16 维 FA 上肢位置命令
+左臂 / 右臂 / 头部关节目标 -> minimum snap 轨迹 -> 16 维 FA 上肢位置命令
 ```
 
 ## Topic
@@ -14,7 +14,7 @@
 
 - `/min_snap/target`
   - 类型：`min_snap/msg/MinSnapTarget`
-  - 遥操作或测试程序发布左右臂目标关节角。
+  - 遥操作或测试程序发布左臂、右臂、头部目标关节角。
 - `/joint_states`
   - 类型：`sensor_msgs/msg/JointState`
   - 用于获取起点状态、neck 位置和 CSV 中的实际轨迹。
@@ -51,7 +51,7 @@ data[14] = neck_yaw_joint
 data[15] = neck_pitch_joint
 ```
 
-minimum snap 只作用于前 14 个手臂关节。neck 两个关节保持 `/joint_states` 中的当前值；如果 `/joint_states` 不包含 neck，则使用 `neck_default_position`。
+minimum snap 作用于左右臂 14 个关节，以及可选的 2 个 neck 关节。左臂、右臂或 neck 任一目标数组为空时，该组关节保持 `/joint_states` 中的当前值；如果 `/joint_states` 不包含 neck，则 neck 使用 `neck_default_position`。
 
 ## 输入消息
 
@@ -60,6 +60,7 @@ minimum snap 只作用于前 14 个手臂关节。neck 两个关节保持 `/join
 ```text
 float64[] left_arm_target_rad
 float64[] right_arm_target_rad
+float64[] neck_target_rad
 float64 expected_duration_s
 float64 max_velocity_rad_s
 float64 max_acceleration_rad_s2
@@ -67,8 +68,9 @@ float64 max_acceleration_rad_s2
 
 要求：
 
-- `left_arm_target_rad` 长度必须是 7。
-- `right_arm_target_rad` 长度必须是 7。
+- `left_arm_target_rad` 可以为空，或提供 7 个目标值。
+- `right_arm_target_rad` 可以为空，或提供 7 个目标值。
+- `neck_target_rad` 可以为空，或按 `[neck_yaw_joint, neck_pitch_joint]` 提供 2 个目标值。
 - 目标数组不能包含 NaN 或 Inf。
 - `max_velocity_rad_s > 0`。
 - `max_acceleration_rad_s2 > 0`。
@@ -148,6 +150,169 @@ start_jerk         = 0
 
 如果当前没有正在执行的轨迹，则从 `/joint_states` 读取起点位置和速度；如果 velocity 字段缺失，则速度按 0 处理。
 
+## 最小使用 Demo
+
+这个 demo 使用 `fa_rviz_command_bridge` 把 `/upper_position_controller/commands` 转成 `/joint_states` 并在 RViz 中显示；`min_snap_node` 负责接收 `/min_snap/target` 并发布 16 维上肢命令。
+
+### 1. 编译
+
+`min_snap`：
+
+```bash
+cd /home/likunwei/humanoid_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select min_snap --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+```
+
+RViz command bridge：
+
+```bash
+cd /home/likunwei/dataCollection/beavr-bot
+source /opt/ros/humble/setup.bash
+colcon build \
+  --base-paths robots/fa_description robots/fa_rviz_command_bridge \
+  --packages-select fa_description fa_rviz_command_bridge
+source install/setup.bash
+```
+
+### 2. 启动 RViz Bridge
+
+开一个终端：
+
+```bash
+cd /home/likunwei/dataCollection/beavr-bot
+source install/setup.bash
+ros2 launch fa_rviz_command_bridge fa_command_rviz.launch.py
+```
+
+该 bridge 默认发布 `/joint_states` 到 1 kHz，包括静止时的 idle 状态。确认频率：
+
+```bash
+ros2 topic hz /joint_states
+```
+
+### 3. 启动 min_snap
+
+再开一个终端：
+
+```bash
+cd /home/likunwei/humanoid_ws
+source install/setup.bash
+ros2 launch min_snap min_snap.launch.py
+```
+
+确认接口存在：
+
+```bash
+ros2 topic info /min_snap/target
+ros2 service list | grep min_snap
+```
+
+### 4. 发布最小目标
+
+只发左臂目标，右臂和头部保持当前 `/joint_states`：
+
+```bash
+ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
+  left_arm_target_rad: [0.30, -0.20, 0.15, -0.40, 0.12, -0.08, 0.10],
+  right_arm_target_rad: [],
+  neck_target_rad: [],
+  expected_duration_s: 1.0,
+  max_velocity_rad_s: 0.8,
+  max_acceleration_rad_s2: 4.0
+}"
+```
+
+只发右臂目标，左臂和头部保持当前 `/joint_states`：
+
+```bash
+ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
+  left_arm_target_rad: [],
+  right_arm_target_rad: [-0.30, 0.20, -0.15, -0.40, -0.12, 0.08, -0.10],
+  neck_target_rad: [],
+  expected_duration_s: 1.0,
+  max_velocity_rad_s: 0.8,
+  max_acceleration_rad_s2: 4.0
+}"
+```
+
+只发头部目标，左右臂保持当前 `/joint_states`：
+
+```bash
+ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
+  left_arm_target_rad: [],
+  right_arm_target_rad: [],
+  neck_target_rad: [0.20, -0.10],
+  expected_duration_s: 1.0,
+  max_velocity_rad_s: 0.8,
+  max_acceleration_rad_s2: 4.0
+}"
+```
+
+同时发左臂、右臂和头部目标：
+
+```bash
+ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
+  left_arm_target_rad: [0.30, -0.20, 0.15, -0.40, 0.12, -0.08, 0.10],
+  right_arm_target_rad: [-0.30, 0.20, -0.15, -0.40, -0.12, 0.08, -0.10],
+  neck_target_rad: [0.20, -0.10],
+  expected_duration_s: 1.0,
+  max_velocity_rad_s: 0.8,
+  max_acceleration_rad_s2: 4.0
+}"
+```
+
+检查输出：
+
+```bash
+ros2 topic echo /upper_position_controller/commands
+ros2 topic echo /min_snap/desired_joint_states
+```
+
+### 5. 暂停和恢复
+
+暂停会停用当前 active trajectory，并停止继续发布轨迹点：
+
+```bash
+ros2 service call /min_snap/pause_trajectory_publish std_srvs/srv/Trigger "{}"
+```
+
+恢复只解除“暂停发布”状态，不会继续执行已经被 pause 清掉的旧轨迹。恢复后机器人应保持不动，直到收到新的 `/min_snap/target`：
+
+```bash
+ros2 service call /min_snap/resume_trajectory_publish std_srvs/srv/Trigger "{}"
+```
+
+### 6. 在线自动测试
+
+在 RViz bridge 和 `min_snap_node` 都已启动后，可以运行 9 个组合场景测试：
+
+```bash
+cd /home/likunwei/humanoid_ws
+source install/setup.bash
+/usr/bin/python3 install/min_snap/lib/min_snap/test_min_snap_online_scenarios.py --no-start-min-snap --manual
+```
+
+如果没有单独启动 `min_snap_node`，让测试脚本自己启动：
+
+```bash
+/usr/bin/python3 install/min_snap/lib/min_snap/test_min_snap_online_scenarios.py --manual
+```
+
+目标幅度可用 `--amplitude-scale` 调整：
+
+```bash
+/usr/bin/python3 install/min_snap/lib/min_snap/test_min_snap_online_scenarios.py \
+  --no-start-min-snap --manual --amplitude-scale 1.5
+```
+
+测试结果会保存到：
+
+```bash
+/home/likunwei/humanoid_ws/src/min_snap/logs/online_scenarios
+```
+
 ## 参数
 
 默认参数文件：
@@ -159,7 +324,7 @@ start_jerk         = 0
 关键参数：
 
 ```yaml
-publish_hz: 200.0
+publish_hz: 1000.0
 target_topic: "/min_snap/target"
 command_topic: "/upper_position_controller/commands"
 desired_joint_states_topic: "/min_snap/desired_joint_states"
@@ -168,92 +333,30 @@ pause_publish_service: "/min_snap/pause_trajectory_publish"
 resume_publish_service: "/min_snap/resume_trajectory_publish"
 
 min_duration_s: 0.01
-default_expected_duration_s: 0.5
-default_max_velocity_rad_s: 0.25
-default_max_acceleration_rad_s2: 0.25
+default_expected_duration_s: 0.1
+default_max_velocity_rad_s: 1.2
+default_max_acceleration_rad_s2: 8.0
 
-duration_scale_on_violation: 1.1
-max_duration_search_iterations: 50
-constraint_sample_count: 500
+duration_scale_on_violation: 1.12
+max_duration_search_iterations: 10
+constraint_sample_count: 200
 
-replan_threshold_rad: 0.0005
+replan_threshold_rad: 0.001
 require_joint_state_before_start: true
-joint_state_timeout_s: 0.5
+joint_state_timeout_s: 0.1
 
-record_tracking: true
+record_tracking: false
 tracking_output_dir: "/home/likunwei/humanoid_ws/src/min_snap/logs"
+record_run_log: false
+run_log_output_dir: "/home/likunwei/humanoid_ws/src/min_snap/Log"
 neck_default_position: [0.0, 0.0]
 ```
 
-## 编译
-
-```bash
-cd /home/likunwei/humanoid_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select min_snap --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install/setup.bash
-```
-
-## 运行
-
-```bash
-ros2 launch min_snap min_snap.launch.py
-```
-
-默认 launch 会把 `/home/likunwei/humanoid_ws/src/min_snap/config/min_snap.yaml` 作为参数文件传给 `min_snap_node`。如需换配置：
+默认 launch 会把该参数文件传给 `min_snap_node`。如需换配置：
 
 ```bash
 ros2 launch min_snap min_snap.launch.py \
   params_file:=/path/to/min_snap.yaml
-```
-
-## 测试发布目标
-
-先保证 `/joint_states` 中存在 14 个 FA 手臂关节。然后发布测试目标：
-
-```bash
-ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
-  left_arm_target_rad: [0.0, 0.2, 0.0, -0.5, 0.0, 0.0, 0.0],
-  right_arm_target_rad: [0.0, -0.2, 0.0, -0.5, 0.0, 0.0, 0.0],
-  expected_duration_s: 0.5,
-  max_velocity_rad_s: 0.25,
-  max_acceleration_rad_s2: 0.25
-}"
-```
-
-检查输出：
-
-```bash
-ros2 topic echo /upper_position_controller/commands
-ros2 topic echo /min_snap/desired_joint_states
-```
-
-## 暂停/恢复轨迹点下发
-
-调用 Trigger 服务后，节点会停用当前 active trajectory，并停止继续发布优化后的轨迹采样点。服务回调会校验暂停状态和左右 planner 状态；只有确认已停发时才返回 `success: true`。
-
-```bash
-ros2 service call /min_snap/pause_trajectory_publish std_srvs/srv/Trigger "{}"
-```
-
-恢复发布使用独立的 Trigger 服务。恢复只解除发布暂停状态，不会自动恢复已经停用的旧轨迹；通常在状态机收到 pause 成功返回后、发送下一组 `/min_snap/target` 前调用。
-
-```bash
-ros2 service call /min_snap/resume_trajectory_publish std_srvs/srv/Trigger "{}"
-```
-
-也可以运行包内的 client demo：
-
-```bash
-ros2 run min_snap pause_publish_client
-ros2 run min_snap resume_publish_client
-```
-
-如果服务名被参数改掉了，可以把服务名作为第一个参数传入：
-
-```bash
-ros2 run min_snap pause_publish_client /your/pause_service
-ros2 run min_snap resume_publish_client /your/resume_service
 ```
 
 ## C++ 使用示例
@@ -283,11 +386,12 @@ private:
   void publish_once()
   {
     min_snap::msg::MinSnapTarget msg;
-    msg.left_arm_target_rad = {0.0, 0.2, 0.0, -0.5, 0.0, 0.0, 0.0};
-    msg.right_arm_target_rad = {0.0, -0.2, 0.0, -0.5, 0.0, 0.0, 0.0};
-    msg.expected_duration_s = 0.5;
-    msg.max_velocity_rad_s = 0.25;
-    msg.max_acceleration_rad_s2 = 0.25;
+    msg.left_arm_target_rad = {0.30, -0.20, 0.15, -0.40, 0.12, -0.08, 0.10};
+    msg.right_arm_target_rad = {};
+    msg.neck_target_rad = {};
+    msg.expected_duration_s = 1.0;
+    msg.max_velocity_rad_s = 0.8;
+    msg.max_acceleration_rad_s2 = 4.0;
 
     publisher_->publish(msg);
     RCLCPP_INFO(get_logger(), "Published one min_snap target");

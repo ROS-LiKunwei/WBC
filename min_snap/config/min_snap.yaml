@@ -101,11 +101,11 @@ min_snap_node:
 
     # tracking CSV 记录开关。为 true 时，记录实际 joint_states，以及优化后的期望位置、
     # 速度、加速度、加加速度到 tracking_output_dir。
-    record_tracking: false
+    record_tracking: true
     tracking_output_dir: "/home/likunwei/humanoid_ws/src/min_snap/logs"
 
     # 文本运行日志开关。用于记录 min_snap 的告警、失败、重规划和周期性运行统计。
-    record_run_log: false
+    record_run_log: true
     run_log_output_dir: "/home/likunwei/humanoid_ws/src/min_snap/Log"
 
     # 周期性运行统计日志的记录周期。事件日志会立即写入，不受该参数限制。
@@ -114,7 +114,8 @@ min_snap_node:
     # 高频 WARN 写入文本运行日志的最小间隔。同类 WARN 在该时间内只记录一次。
     run_log_warn_throttle_s: 2.0
 
-    # 颈部关节不参与上肢 min-snap 优化。发布上半身命令时会附带这些默认值。
+    # /joint_states 不包含 neck 时使用的默认 neck 起点/保持目标。
+    # MinSnapTarget.neck_target_rad 为空时，neck 会保持当前反馈值或该默认值。
     neck_default_position:
       - 0.0
       - 0.0

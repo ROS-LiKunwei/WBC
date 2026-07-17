@@ -10,13 +10,17 @@
 namespace min_snap
 {
 
-struct ArmTrajectorySample
+template<std::size_t JointCount>
+struct JointTrajectorySample
 {
-  ArmArray position{};
-  ArmArray velocity{};
-  ArmArray acceleration{};
-  ArmArray jerk{};
+  std::array<double, JointCount> position{};
+  std::array<double, JointCount> velocity{};
+  std::array<double, JointCount> acceleration{};
+  std::array<double, JointCount> jerk{};
 };
+
+using ArmTrajectorySample = JointTrajectorySample<kArmJointCount>;
+using NeckTrajectorySample = JointTrajectorySample<kNeckJointCount>;
 
 struct PlannerConfig
 {
@@ -28,37 +32,40 @@ struct PlannerConfig
   double snap_weight_lambda{0.85};
 };
 
-class MinSnapArmPlanner
+template<std::size_t JointCount>
+class MinSnapPlanner
 {
 public:
-  explicit MinSnapArmPlanner(std::string name = "arm");
+  using JointArray = std::array<double, JointCount>;
+
+  explicit MinSnapPlanner(std::string name = "joint_group");
 
   bool plan(
-    const ArmArray & start_pos,
-    const ArmArray & start_vel,
-    const ArmArray & start_acc,
-    const ArmArray & goal_pos,
+    const JointArray & start_pos,
+    const JointArray & start_vel,
+    const JointArray & start_acc,
+    const JointArray & goal_pos,
     double expected_duration,
     double max_velocity,
     double max_acceleration,
-    const ArmArray & lower_limit,
-    const ArmArray & upper_limit,
+    const JointArray & lower_limit,
+    const JointArray & upper_limit,
     const PlannerConfig & config,
     double * final_duration = nullptr,
     bool * duration_extended = nullptr);
 
-  ArmTrajectorySample sample(double elapsed_time) const;
+  JointTrajectorySample<JointCount> sample(double elapsed_time) const;
   bool active() const { return active_; }
   void deactivate() { active_ = false; }
   bool finished(double elapsed_time) const;
   double duration() const { return duration_s_; }
-  const ArmArray & goal() const { return goal_pos_; }
+  const JointArray & goal() const { return goal_pos_; }
   const std::string & last_failure_reason() const { return last_failure_reason_; }
 
 private:
   double constrained_duration(
-    const ArmArray & start_pos,
-    const ArmArray & goal_pos,
+    const JointArray & start_pos,
+    const JointArray & goal_pos,
     double expected_duration,
     double max_velocity,
     double max_acceleration,
@@ -72,17 +79,20 @@ private:
   std::string constraint_failure_summary(
     double max_velocity,
     double max_acceleration,
-    const ArmArray & lower_limit,
-    const ArmArray & upper_limit,
+    const JointArray & lower_limit,
+    const JointArray & upper_limit,
     std::size_t sample_count,
     double duration) const;
 
   std::string name_;
-  std::array<MinSnapTrajectory, kArmJointCount> trajectories_{};
-  ArmArray goal_pos_{};
+  std::array<MinSnapTrajectory, JointCount> trajectories_{};
+  JointArray goal_pos_{};
   std::string last_failure_reason_;
   double duration_s_{0.0};
   bool active_{false};
 };
+
+using MinSnapArmPlanner = MinSnapPlanner<kArmJointCount>;
+using MinSnapNeckPlanner = MinSnapPlanner<kNeckJointCount>;
 
 }  // namespace min_snap

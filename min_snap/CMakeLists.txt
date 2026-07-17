@@ -86,7 +86,10 @@ install(DIRECTORY launch
 )
 
 install(PROGRAMS
+  scripts/benchmark_min_snap_cpu.py
+  scripts/monitor_min_snap_cpu.py
   scripts/plot_min_snap_tracking.py
+  scripts/test_min_snap_online_scenarios.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -16,21 +16,23 @@ constexpr double kMinSnapMaxSDot = 2.1875;
 constexpr double kMinSnapMaxAbsSDDot = 7.513188404399293;
 }
 
-MinSnapArmPlanner::MinSnapArmPlanner(std::string name)
+template<std::size_t JointCount>
+MinSnapPlanner<JointCount>::MinSnapPlanner(std::string name)
 : name_(std::move(name))
 {
 }
 
-bool MinSnapArmPlanner::plan(
-  const ArmArray & start_pos,
-  const ArmArray & start_vel,
-  const ArmArray & start_acc,
-  const ArmArray & goal_pos,
+template<std::size_t JointCount>
+bool MinSnapPlanner<JointCount>::plan(
+  const JointArray & start_pos,
+  const JointArray & start_vel,
+  const JointArray & start_acc,
+  const JointArray & goal_pos,
   double expected_duration,
   double max_velocity,
   double max_acceleration,
-  const ArmArray & lower_limit,
-  const ArmArray & upper_limit,
+  const JointArray & lower_limit,
+  const JointArray & upper_limit,
   const PlannerConfig & config,
   double * final_duration,
   bool * duration_extended)
@@ -71,7 +73,7 @@ bool MinSnapArmPlanner::plan(
   const int max_iterations = std::max(1, config.max_duration_search_iterations);
   for (int iter = 0; iter < max_iterations; ++iter) {
     bool solved = true;
-    for (std::size_t i = 0; i < kArmJointCount; ++i) {
+    for (std::size_t i = 0; i < JointCount; ++i) {
       solved = trajectories_[i].solve(
         start_pos[i], start_vel[i], start_acc[i], goal_pos[i], 0.0, 0.0, duration,
         config.snap_weight_lambda) && solved;
@@ -133,11 +135,12 @@ bool MinSnapArmPlanner::plan(
   return true;
 }
 
-ArmTrajectorySample MinSnapArmPlanner::sample(double elapsed_time) const
+template<std::size_t JointCount>
+JointTrajectorySample<JointCount> MinSnapPlanner<JointCount>::sample(double elapsed_time) const
 {
-  ArmTrajectorySample sample;
+  JointTrajectorySample<JointCount> sample;
   const double t = std::clamp(elapsed_time, 0.0, duration_s_);
-  for (std::size_t i = 0; i < kArmJointCount; ++i) {
+  for (std::size_t i = 0; i < JointCount; ++i) {
     const auto state = trajectories_[i].sample(t);
     sample.position[i] = state.position;
     sample.velocity[i] = state.velocity;
@@ -147,21 +150,23 @@ ArmTrajectorySample MinSnapArmPlanner::sample(double elapsed_time) const
   return sample;
 }
 
-bool MinSnapArmPlanner::finished(double elapsed_time) const
+template<std::size_t JointCount>
+bool MinSnapPlanner<JointCount>::finished(double elapsed_time) const
 {
   return active_ && elapsed_time >= duration_s_;
 }
 
-double MinSnapArmPlanner::constrained_duration(
-  const ArmArray & start_pos,
-  const ArmArray & goal_pos,
+template<std::size_t JointCount>
+double MinSnapPlanner<JointCount>::constrained_duration(
+  const JointArray & start_pos,
+  const JointArray & goal_pos,
   double expected_duration,
   double max_velocity,
   double max_acceleration,
   double min_duration) const
 {
   double duration = std::max(expected_duration, min_duration);
-  for (std::size_t i = 0; i < kArmJointCount; ++i) {
+  for (std::size_t i = 0; i < JointCount; ++i) {
     const double delta = std::abs(goal_pos[i] - start_pos[i]);
     duration = std::max(duration, delta * kMinSnapMaxSDot / max_velocity);
     duration = std::max(duration, std::sqrt(delta * kMinSnapMaxAbsSDDot / max_acceleration));
@@ -169,14 +174,15 @@ double MinSnapArmPlanner::constrained_duration(
   return std::max(duration, min_duration);
 }
 
-bool MinSnapArmPlanner::satisfies_constraints(
+template<std::size_t JointCount>
+bool MinSnapPlanner<JointCount>::satisfies_constraints(
   double max_velocity,
   double max_acceleration,
   std::size_t sample_count) const
 {
   constexpr double tolerance = 1.000001;
   sample_count = std::max<std::size_t>(2, sample_count);
-  for (std::size_t joint = 0; joint < kArmJointCount; ++joint) {
+  for (std::size_t joint = 0; joint < JointCount; ++joint) {
     const auto & trajectory = trajectories_[joint];
     for (std::size_t sample = 0; sample < sample_count; ++sample) {
       const double t = duration_s_ * static_cast<double>(sample) / static_cast<double>(sample_count - 1);
@@ -192,11 +198,12 @@ bool MinSnapArmPlanner::satisfies_constraints(
   return true;
 }
 
-std::string MinSnapArmPlanner::constraint_failure_summary(
+template<std::size_t JointCount>
+std::string MinSnapPlanner<JointCount>::constraint_failure_summary(
   double max_velocity,
   double max_acceleration,
-  const ArmArray & lower_limit,
-  const ArmArray & upper_limit,
+  const JointArray & lower_limit,
+  const JointArray & upper_limit,
   std::size_t sample_count,
   double duration) const
 {
@@ -209,7 +216,7 @@ std::string MinSnapArmPlanner::constraint_failure_summary(
   std::size_t limit_violation_joint = 0;
   double peak_velocity_time = 0.0;
   double peak_acceleration_time = 0.0;
-  for (std::size_t joint = 0; joint < kArmJointCount; ++joint) {
+  for (std::size_t joint = 0; joint < JointCount; ++joint) {
     const auto & trajectory = trajectories_[joint];
     for (std::size_t sample = 0; sample < sample_count; ++sample) {
       const double t = duration * static_cast<double>(sample) / static_cast<double>(sample_count - 1);
@@ -249,5 +256,8 @@ std::string MinSnapArmPlanner::constraint_failure_summary(
          << " limit_violation_joint=" << limit_violation_joint;
   return stream.str();
 }
+
+template class MinSnapPlanner<kArmJointCount>;
+template class MinSnapPlanner<kNeckJointCount>;
 
 }  // namespace min_snap

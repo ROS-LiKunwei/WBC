@@ -125,6 +125,7 @@ def send_target(setup: Path, log_dir: Path) -> subprocess.Popen:
         "{"
         "left_arm_target_rad: [0.0, 0.2, 0.0, -0.5, 0.0, 0.0, 0.0], "
         "right_arm_target_rad: [0.0, -0.2, 0.0, -0.5, 0.0, 0.0, 0.0], "
+        "neck_target_rad: [0.0, 0.1], "
         "expected_duration_s: 0.8, "
         "max_velocity_rad_s: 1.2, "
         "max_acceleration_rad_s2: 8.0"
