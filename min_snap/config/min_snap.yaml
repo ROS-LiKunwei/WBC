@@ -20,6 +20,13 @@ min_snap_node:
     # 机器人实际状态反馈。用于规划初始状态、tracking CSV 记录，以及状态超时安全检查。
     joint_states_topic: "/joint_states"
 
+    # 调用该 Trigger 服务后，min_snap 会停用当前 active trajectory，并停止继续下发轨迹采样点。
+    pause_publish_service: "/min_snap/pause_trajectory_publish"
+
+    # 调用该 Trigger 服务后，min_snap 会恢复轨迹采样点发布。通常在状态机收到 pause 返回后、
+    # 发送下一组目标前调用。
+    resume_publish_service: "/min_snap/resume_trajectory_publish"
+
     # 生成轨迹段的最小时长。目标时长小于该值时，会先被夹到该值再优化。
     min_duration_s: 0.01
 
@@ -94,11 +101,11 @@ min_snap_node:
 
     # tracking CSV 记录开关。为 true 时，记录实际 joint_states，以及优化后的期望位置、
     # 速度、加速度、加加速度到 tracking_output_dir。
-    record_tracking: true
+    record_tracking: false
     tracking_output_dir: "/home/likunwei/humanoid_ws/src/min_snap/logs"
 
     # 文本运行日志开关。用于记录 min_snap 的告警、失败、重规划和周期性运行统计。
-    record_run_log: true
+    record_run_log: false
     run_log_output_dir: "/home/likunwei/humanoid_ws/src/min_snap/Log"
 
     # 周期性运行统计日志的记录周期。事件日志会立即写入，不受该参数限制。

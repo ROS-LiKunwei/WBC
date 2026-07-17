@@ -19,6 +19,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 namespace min_snap
 {
@@ -118,12 +119,27 @@ public:
 
     command_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(command_topic_, 10);
     desired_joint_state_pub_ = create_publisher<sensor_msgs::msg::JointState>(desired_joint_states_topic_, 10);
+    initialize_reusable_messages();
     target_sub_ = create_subscription<min_snap::msg::MinSnapTarget>(
       target_topic_, rclcpp::QoS(rclcpp::KeepLast(1)),
       [this](const min_snap::msg::MinSnapTarget::SharedPtr msg) { on_target(*msg); });
     joint_state_sub_ = create_subscription<sensor_msgs::msg::JointState>(
       joint_states_topic_, 20,
       [this](const sensor_msgs::msg::JointState::SharedPtr msg) { on_joint_state(*msg); });
+    pause_publish_service_ = create_service<std_srvs::srv::Trigger>(
+      pause_publish_service_name_,
+      [this](
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        on_pause_publish_request(request, response);
+      });
+    resume_publish_service_ = create_service<std_srvs::srv::Trigger>(
+      resume_publish_service_name_,
+      [this](
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        on_resume_publish_request(request, response);
+      });
 
     if (record_tracking_) {
       if (recorder_.open(tracking_output_dir_)) {
@@ -137,6 +153,7 @@ public:
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
       [this]() { on_timer(); });
+    timer_->cancel();
 
     RCLCPP_INFO(
       get_logger(),
@@ -147,7 +164,9 @@ public:
       "node_ready robot_type=" + robot_type_ +
       " target_topic=" + target_topic_ +
       " command_topic=" + command_topic_ +
-      " joint_states_topic=" + joint_states_topic_);
+      " joint_states_topic=" + joint_states_topic_ +
+      " pause_publish_service=" + pause_publish_service_name_ +
+      " resume_publish_service=" + resume_publish_service_name_);
   }
 
   ~MinSnapNode() override
@@ -186,6 +205,10 @@ private:
     desired_joint_states_topic_ =
       declare_parameter<std::string>("desired_joint_states_topic", "/min_snap/desired_joint_states");
     joint_states_topic_ = declare_parameter<std::string>("joint_states_topic", "/joint_states");
+    pause_publish_service_name_ =
+      declare_parameter<std::string>("pause_publish_service", "/min_snap/pause_trajectory_publish");
+    resume_publish_service_name_ =
+      declare_parameter<std::string>("resume_publish_service", "/min_snap/resume_trajectory_publish");
     planner_config_.min_duration_s = declare_parameter<double>("min_duration_s", 0.01);
     default_expected_duration_s_ = declare_parameter<double>("default_expected_duration_s", 0.016);
     default_max_velocity_rad_s_ = declare_parameter<double>("default_max_velocity_rad_s", 1.5);
@@ -236,17 +259,35 @@ private:
 
   void on_joint_state(const sensor_msgs::msg::JointState & msg)
   {
-    latest_positions_.clear();
-    latest_velocities_.clear();
+    std::array<bool, kArmJointCount> left_seen{};
+    std::array<bool, kArmJointCount> right_seen{};
+    latest_left_velocities_ = ArmArray{};
+    latest_right_velocities_ = ArmArray{};
+    if (recorder_.enabled()) {
+      latest_positions_.clear();
+      latest_velocities_.clear();
+    }
     const bool velocity_size_matches_names = msg.velocity.size() >= msg.name.size();
     for (std::size_t i = 0; i < msg.name.size(); ++i) {
+      const auto slot_it = joint_state_name_slots_.find(msg.name[i]);
+      const bool known_joint = slot_it != joint_state_name_slots_.end();
       if (i < msg.position.size()) {
-        latest_positions_[msg.name[i]] = msg.position[i];
+        if (known_joint) {
+          set_cached_joint_position(slot_it->second, msg.position[i], left_seen, right_seen);
+        }
+        if (recorder_.enabled()) {
+          latest_positions_[msg.name[i]] = msg.position[i];
+        }
       }
       if (use_joint_state_velocity_ && velocity_size_matches_names) {
         const double velocity = msg.velocity[i];
         if (joint_state_velocity_valid(velocity)) {
-          latest_velocities_[msg.name[i]] = velocity;
+          if (known_joint) {
+            set_cached_joint_velocity(slot_it->second, velocity);
+          }
+          if (recorder_.enabled()) {
+            latest_velocities_[msg.name[i]] = velocity;
+          }
         } else {
           RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 2000,
@@ -272,9 +313,13 @@ private:
     }
     last_joint_state_time_ = now();
 
-    ArmArray left{};
-    ArmArray right{};
-    has_arm_joint_state_ = extract_active_arm_positions(latest_positions_, left, right);
+    has_arm_joint_state_ = true;
+    for (std::size_t i = 0; i < active_arm_joint_count_; ++i) {
+      if (!left_seen[i] || !right_seen[i]) {
+        has_arm_joint_state_ = false;
+        break;
+      }
+    }
     if (!has_arm_joint_state_) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
@@ -418,6 +463,9 @@ private:
     latest_left_goal_ = left_goal;
     latest_right_goal_ = right_goal;
     has_goal_ = true;
+    if (!trajectory_publish_paused_) {
+      timer_->reset();
+    }
 
     const double final_duration = std::max(left_duration, right_duration);
     if (left_extended || right_extended || final_duration > expected_duration + 1e-9) {
@@ -502,22 +550,13 @@ private:
     ArmArray & right_pos,
     ArmArray & right_vel) const
   {
-    if (!extract_active_arm_positions(latest_positions_, left_pos, right_pos)) {
+    if (!has_arm_joint_state_) {
       return false;
     }
-    const auto & left_names = left_arm_joint_names();
-    const auto & right_names = right_arm_joint_names();
-    for (std::size_t i = 0; i < active_arm_joint_count_; ++i) {
-      if (!use_joint_state_velocity_) {
-        left_vel[i] = 0.0;
-        right_vel[i] = 0.0;
-        continue;
-      }
-      const auto left_it = latest_velocities_.find(left_names[i]);
-      const auto right_it = latest_velocities_.find(right_names[i]);
-      left_vel[i] = left_it == latest_velocities_.end() ? 0.0 : left_it->second;
-      right_vel[i] = right_it == latest_velocities_.end() ? 0.0 : right_it->second;
-    }
+    left_pos = latest_left_positions_;
+    right_pos = latest_right_positions_;
+    left_vel = use_joint_state_velocity_ ? latest_left_velocities_ : ArmArray{};
+    right_vel = use_joint_state_velocity_ ? latest_right_velocities_ : ArmArray{};
     return true;
   }
 
@@ -553,8 +592,45 @@ private:
     return (now() - last_joint_state_time_).seconds() <= joint_state_timeout_s_;
   }
 
+  void on_pause_publish_request(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> /* request */,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    trajectory_publish_paused_ = true;
+    deactivate_trajectories("pause_publish_service");
+
+    const bool publish_stopped = trajectory_publish_paused_ && !left_planner_.active() && !right_planner_.active();
+    response->success = publish_stopped;
+    response->message = publish_stopped ?
+      "min_snap trajectory point publishing is paused" :
+      "failed to pause min_snap trajectory point publishing";
+
+    if (publish_stopped) {
+      RCLCPP_INFO(get_logger(), "Paused min-snap trajectory point publishing by service request.");
+      write_run_log("pause_publish_service success=true");
+    } else {
+      RCLCPP_ERROR(get_logger(), "Failed to pause min-snap trajectory point publishing.");
+      write_run_log("pause_publish_service success=false", "ERROR");
+    }
+  }
+
+  void on_resume_publish_request(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> /* request */,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    trajectory_publish_paused_ = false;
+    response->success = true;
+    response->message = "min_snap trajectory point publishing is resumed";
+
+    RCLCPP_INFO(get_logger(), "Resumed min-snap trajectory point publishing by service request.");
+    write_run_log("resume_publish_service success=true");
+  }
+
   void on_timer()
   {
+    if (trajectory_publish_paused_) {
+      return;
+    }
     if (!left_planner_.active() || !right_planner_.active()) {
       return;
     }
@@ -575,7 +651,7 @@ private:
       deactivate_trajectories("invalid_publish_sample");
       return;
     }
-    const NeckArray neck = extract_neck_or_default(latest_positions_, neck_default_);
+    const NeckArray neck = latest_neck_position_;
 
     if (robot_type_ == "sysmo32") {
       command_pub_->publish(
@@ -583,19 +659,16 @@ private:
       desired_joint_state_pub_->publish(make_sysmo32_desired_joint_state(
         now_time, left.position, right.position, left.velocity, right.velocity));
     } else {
-      command_pub_->publish(make_upper_command(left.position, right.position, neck));
-    }
-
-    UpperArray desired_position{};
-    UpperArray desired_velocity{};
-    UpperArray desired_acceleration{};
-    UpperArray desired_jerk{};
-    fill_upper_arrays(left, right, neck, desired_position, desired_velocity, desired_acceleration, desired_jerk);
-    if (robot_type_ == "fa") {
-      desired_joint_state_pub_->publish(make_desired_joint_state(now_time, desired_position, desired_velocity));
+      fill_upper_position_velocity(left, right, neck, reusable_desired_position_, reusable_desired_velocity_);
+      publish_reusable_fa_messages(now_time);
     }
 
     if (recorder_.enabled()) {
+      UpperArray desired_position{};
+      UpperArray desired_velocity{};
+      UpperArray desired_acceleration{};
+      UpperArray desired_jerk{};
+      fill_upper_arrays(left, right, neck, desired_position, desired_velocity, desired_acceleration, desired_jerk);
       recorder_.record(
         now_time.seconds(), latest_positions_, latest_velocities_, desired_position, desired_velocity,
         desired_acceleration, desired_jerk);
@@ -614,12 +687,12 @@ private:
       return;
     }
 
-    ArmArray actual_left{};
-    ArmArray actual_right{};
-    if (!extract_active_arm_positions(latest_positions_, actual_left, actual_right)) {
+    if (!has_arm_joint_state_) {
       goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
       return;
     }
+    const ArmArray actual_left = latest_left_positions_;
+    const ArmArray actual_right = latest_right_positions_;
 
     const double tolerance =
       std::isfinite(goal_reached_position_tolerance_rad_) && goal_reached_position_tolerance_rad_ > 0.0 ?
@@ -801,6 +874,9 @@ private:
     right_planner_.deactivate();
     has_goal_ = false;
     goal_reached_since_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+    if (timer_) {
+      timer_->cancel();
+    }
     write_run_log("trajectories_deactivated reason=" + reason);
   }
 
@@ -947,6 +1023,94 @@ private:
     position[15] = neck[1];
   }
 
+  static void fill_upper_position_velocity(
+    const ArmTrajectorySample & left,
+    const ArmTrajectorySample & right,
+    const NeckArray & neck,
+    UpperArray & position,
+    UpperArray & velocity)
+  {
+    for (std::size_t i = 0; i < kArmJointCount; ++i) {
+      position[i] = left.position[i];
+      velocity[i] = left.velocity[i];
+      const std::size_t right_idx = i + kArmJointCount;
+      position[right_idx] = right.position[i];
+      velocity[right_idx] = right.velocity[i];
+    }
+    position[14] = neck[0];
+    position[15] = neck[1];
+    velocity[14] = 0.0;
+    velocity[15] = 0.0;
+  }
+
+  void initialize_reusable_messages()
+  {
+    reusable_upper_command_msg_.data.resize(kUpperJointCount);
+    const auto & names = upper_joint_names();
+    reusable_desired_joint_state_msg_.name.assign(names.begin(), names.end());
+    reusable_desired_joint_state_msg_.position.resize(kUpperJointCount);
+    reusable_desired_joint_state_msg_.velocity.resize(kUpperJointCount);
+    joint_state_name_slots_.reserve(kUpperJointCount);
+    const auto & left_names = left_arm_joint_names();
+    const auto & right_names = right_arm_joint_names();
+    const auto & neck_names = neck_joint_names();
+    for (std::size_t i = 0; i < kArmJointCount; ++i) {
+      joint_state_name_slots_[left_names[i]] = i;
+      joint_state_name_slots_[right_names[i]] = i + kArmJointCount;
+    }
+    for (std::size_t i = 0; i < kNeckJointCount; ++i) {
+      joint_state_name_slots_[neck_names[i]] = i + 2 * kArmJointCount;
+    }
+    latest_neck_position_ = neck_default_;
+  }
+
+  void set_cached_joint_position(
+    std::size_t slot,
+    double position,
+    std::array<bool, kArmJointCount> & left_seen,
+    std::array<bool, kArmJointCount> & right_seen)
+  {
+    if (slot < kArmJointCount) {
+      latest_left_positions_[slot] = position;
+      left_seen[slot] = true;
+    } else if (slot < 2 * kArmJointCount) {
+      const std::size_t index = slot - kArmJointCount;
+      latest_right_positions_[index] = position;
+      right_seen[index] = true;
+    } else {
+      const std::size_t index = slot - 2 * kArmJointCount;
+      if (index < kNeckJointCount) {
+        latest_neck_position_[index] = position;
+      }
+    }
+  }
+
+  void set_cached_joint_velocity(std::size_t slot, double velocity)
+  {
+    if (slot < kArmJointCount) {
+      latest_left_velocities_[slot] = velocity;
+    } else if (slot < 2 * kArmJointCount) {
+      latest_right_velocities_[slot - kArmJointCount] = velocity;
+    }
+  }
+
+  void publish_reusable_fa_messages(const rclcpp::Time & stamp)
+  {
+    std::copy(
+      reusable_desired_position_.begin(), reusable_desired_position_.end(),
+      reusable_upper_command_msg_.data.begin());
+    command_pub_->publish(reusable_upper_command_msg_);
+
+    reusable_desired_joint_state_msg_.header.stamp = stamp;
+    std::copy(
+      reusable_desired_position_.begin(), reusable_desired_position_.end(),
+      reusable_desired_joint_state_msg_.position.begin());
+    std::copy(
+      reusable_desired_velocity_.begin(), reusable_desired_velocity_.end(),
+      reusable_desired_joint_state_msg_.velocity.begin());
+    desired_joint_state_pub_->publish(reusable_desired_joint_state_msg_);
+  }
+
   double publish_hz_{1000.0};
   std::string robot_type_{"fa"};
   std::size_t active_arm_joint_count_{kArmJointCount};
@@ -954,6 +1118,8 @@ private:
   std::string command_topic_;
   std::string desired_joint_states_topic_;
   std::string joint_states_topic_;
+  std::string pause_publish_service_name_;
+  std::string resume_publish_service_name_;
   PlannerConfig planner_config_;
   double default_expected_duration_s_{0.016};
   double default_max_velocity_rad_s_{1.5};
@@ -990,6 +1156,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr desired_joint_state_pub_;
   rclcpp::Subscription<min_snap::msg::MinSnapTarget>::SharedPtr target_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_publish_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr resume_publish_service_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   MinSnapArmPlanner left_planner_;
@@ -1003,6 +1171,7 @@ private:
   std::unordered_map<std::string, rclcpp::Time> last_warn_log_times_;
   bool has_arm_joint_state_{false};
   bool has_goal_{false};
+  bool trajectory_publish_paused_{false};
   ArmArray latest_left_goal_{};
   ArmArray latest_right_goal_{};
 
@@ -1013,6 +1182,16 @@ private:
   std::uint64_t target_sequence_{0};
   std::uint64_t publish_sequence_{0};
   TrajectoryRecorder recorder_;
+  UpperArray reusable_desired_position_{};
+  UpperArray reusable_desired_velocity_{};
+  std_msgs::msg::Float64MultiArray reusable_upper_command_msg_;
+  sensor_msgs::msg::JointState reusable_desired_joint_state_msg_;
+  std::unordered_map<std::string, std::size_t> joint_state_name_slots_;
+  ArmArray latest_left_positions_{};
+  ArmArray latest_right_positions_{};
+  ArmArray latest_left_velocities_{};
+  ArmArray latest_right_velocities_{};
+  NeckArray latest_neck_position_{0.0, 0.0};
 };
 
 }  // namespace min_snap

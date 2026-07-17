@@ -164,6 +164,8 @@ target_topic: "/min_snap/target"
 command_topic: "/upper_position_controller/commands"
 desired_joint_states_topic: "/min_snap/desired_joint_states"
 joint_states_topic: "/joint_states"
+pause_publish_service: "/min_snap/pause_trajectory_publish"
+resume_publish_service: "/min_snap/resume_trajectory_publish"
 
 min_duration_s: 0.01
 default_expected_duration_s: 0.5
@@ -224,6 +226,34 @@ ros2 topic pub --once /min_snap/target min_snap/msg/MinSnapTarget "{
 ```bash
 ros2 topic echo /upper_position_controller/commands
 ros2 topic echo /min_snap/desired_joint_states
+```
+
+## 暂停/恢复轨迹点下发
+
+调用 Trigger 服务后，节点会停用当前 active trajectory，并停止继续发布优化后的轨迹采样点。服务回调会校验暂停状态和左右 planner 状态；只有确认已停发时才返回 `success: true`。
+
+```bash
+ros2 service call /min_snap/pause_trajectory_publish std_srvs/srv/Trigger "{}"
+```
+
+恢复发布使用独立的 Trigger 服务。恢复只解除发布暂停状态，不会自动恢复已经停用的旧轨迹；通常在状态机收到 pause 成功返回后、发送下一组 `/min_snap/target` 前调用。
+
+```bash
+ros2 service call /min_snap/resume_trajectory_publish std_srvs/srv/Trigger "{}"
+```
+
+也可以运行包内的 client demo：
+
+```bash
+ros2 run min_snap pause_publish_client
+ros2 run min_snap resume_publish_client
+```
+
+如果服务名被参数改掉了，可以把服务名作为第一个参数传入：
+
+```bash
+ros2 run min_snap pause_publish_client /your/pause_service
+ros2 run min_snap resume_publish_client /your/resume_service
 ```
 
 ## C++ 使用示例
