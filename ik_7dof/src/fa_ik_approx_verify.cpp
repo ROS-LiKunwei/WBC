@@ -45,6 +45,29 @@ int main()
     ArmKinematicsOptions options;
     options.reference_frame = ArmReferenceFrame::PELVIS;
 
+    Eigen::VectorXd reachable_seed(7);
+    reachable_seed << -0.68, 0.82, -0.97, -1.05, -0.36, 0.0, 0.15;
+    const PoseSE3 seed_pose = solver.computeArmFK_SE3(
+        reachable_seed, ArmSide::LEFT, options);
+    pinocchio::SE3 reachable_target(seed_pose.R, seed_pose.p);
+    reachable_target.translation().x() += 0.005;
+
+    constexpr double convergence_eps = 1e-3;
+    const IKResult reachable_result = solver.solveArmIK(
+        reachable_target,
+        ArmSide::LEFT,
+        reachable_seed,
+        options,
+        50,
+        convergence_eps);
+    const double reachable_error_norm = std::hypot(
+        reachable_result.position_error, reachable_result.orientation_error);
+    if (!reachable_result.success || reachable_error_norm > convergence_eps + 1e-9) {
+        std::cerr << "可达目标未满足 eps=1e-3 的末端误差停止条件: error_norm="
+                  << reachable_error_norm << std::endl;
+        return 1;
+    }
+
     pinocchio::SE3 unreachable_target;
     unreachable_target.translation(Eigen::Vector3d(-0.00768, -0.32075, -0.053335));
     Eigen::Quaterniond target_quat(0.001, 0.707, 0.707, 0.001);

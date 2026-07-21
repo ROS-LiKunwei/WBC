@@ -34,6 +34,7 @@ struct ArmKinematicsOptions {
     double orientation_weight = 1.0;
     double acceptable_position_error = 0.05;
     double acceptable_orientation_error = 0.05;
+    double continuity_nullspace_weight = 0.0;
 };
 
 struct IKResult
@@ -62,6 +63,11 @@ public:
     IKSolver(const std::string& urdf_file, const std::string& srdf_file = "");
     ~IKSolver();
 
+    void setComfortNullspace(
+        double weight,
+        const Eigen::VectorXd& left_q_ref,
+        const Eigen::VectorXd& right_q_ref);
+
     PoseSE3 computeArmFK_SE3(const Eigen::VectorXd& q, ArmSide arm_side,
                              const ArmKinematicsOptions& options = ArmKinematicsOptions{});
 
@@ -69,6 +75,7 @@ public:
         const pinocchio::SE3& T_target,
         const Eigen::VectorXd& q_init,
         int max_iters,
+        // 未加权 log6(SE3) 末端误差范数的收敛阈值。
         double eps,
         int& iters_out,
         SolverMethod method,
@@ -84,6 +91,7 @@ public:
         const Eigen::VectorXd initial_q,
         const ArmKinematicsOptions options,
         const int max_iters = 200,
+        // 未加权 log6(SE3) 末端误差范数的收敛阈值。
         const double eps = 1e-3);
 
     PoseRPY computeArmFK(const Eigen::VectorXd& q, ArmSide arm_side,
@@ -150,6 +158,9 @@ private:
 
     std::string urdf_file_;
     std::string srdf_file_;
+    double comfort_nullspace_weight_ = 0.08;
+    Eigen::VectorXd comfort_left_q_ref_;
+    Eigen::VectorXd comfort_right_q_ref_;
 };
 
 } // namespace fa_arm_kinematic

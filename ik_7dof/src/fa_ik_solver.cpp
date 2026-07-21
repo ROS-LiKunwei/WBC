@@ -192,6 +192,10 @@ public:
 IKSolver::IKSolver(const std::string& urdf_file, const std::string& srdf_file)
     : urdf_file_(urdf_file), srdf_file_(srdf_file)
 {
+    comfort_left_q_ref_.resize(7);
+    comfort_right_q_ref_.resize(7);
+    comfort_left_q_ref_ << -0.5, 0.5, -0.5, -0.5, 0.5, 0.0, 0.0;
+    comfort_right_q_ref_ << -0.5, 0.5, 0.5, -0.5, 0.5, 0.0, 0.0;
     pimpl_ = std::make_unique<Impl>(
         urdf_file,
         srdf_file,
@@ -264,6 +268,20 @@ IKSolver::IKSolver(const std::string& urdf_file, const std::string& srdf_file)
 
 IKSolver::~IKSolver() = default;
 
+void IKSolver::setComfortNullspace(
+    double weight,
+    const Eigen::VectorXd& left_q_ref,
+    const Eigen::VectorXd& right_q_ref)
+{
+    if (left_q_ref.size() != 7 || right_q_ref.size() != 7
+        || !left_q_ref.allFinite() || !right_q_ref.allFinite()) {
+        throw std::invalid_argument("FA IK comfort references must contain 7 finite values per arm");
+    }
+    comfort_nullspace_weight_ = std::max(0.0, weight);
+    comfort_left_q_ref_ = left_q_ref;
+    comfort_right_q_ref_ = right_q_ref;
+}
+
 Eigen::VectorXd IKSolver::solveIK_Core(
     const pinocchio::SE3& T_target,
     const Eigen::VectorXd& q_init,
@@ -303,6 +321,8 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     VectorXd grad_H = VectorXd::Zero(n_arm);
     VectorXd best_q_arm = VectorXd::Zero(n_arm);
     double best_error_norm = std::numeric_limits<double>::infinity();
+    bool best_acceptable_solution = false;
+    const double convergence_eps = std::max(eps, std::numeric_limits<double>::epsilon());
 
     if (exact_solution) {
         *exact_solution = false;
@@ -310,8 +330,7 @@ Eigen::VectorXd IKSolver::solveIK_Core(
     if (acceptable_solution) {
         *acceptable_solution = false;
     }
-    (void)eps;
-    
+
     for (int iter = 0; iter < max_iters; ++iter) {
         iters_out = iter + 1;
 
@@ -350,28 +369,28 @@ Eigen::VectorXd IKSolver::solveIK_Core(
         double position_error = err.head<3>().norm();
         double orientation_error = err.tail<3>().norm();
 
+        // eps 是未加权 SE(3) 末端误差范数的收敛要求。
+        const bool exact_reached = error_norm <= convergence_eps;
+        const bool acceptable_reached =
+            position_error <= std::max(0.0, options.acceptable_position_error)
+            && orientation_error <= std::max(0.0, options.acceptable_orientation_error);
+
         // 记录当前迭代中误差最小的关节角，目标不可达时返回这个最优近似解。
         if (weighted_error_norm < best_error_norm) {
             best_error_norm = weighted_error_norm;
+            best_acceptable_solution = acceptable_reached;
             for (int i = 0; i < n_arm; ++i) {
                 best_q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             }
         }
 
-        // 在线遥操作分两级判定：
-        // 精确解：位置 <= 5mm 且姿态 <= 0.05rad。
-        // 可用近似解：默认位置 <= 5cm 且姿态 <= 0.05rad。
-        // 在线遥操作可通过 options 放宽姿态阈值，实现位置优先、姿态弱约束。
-        const bool exact_reached = position_error <= 0.005 && orientation_error <= 0.05;
-        const bool acceptable_reached =
-            position_error <= std::max(0.0, options.acceptable_position_error)
-            && orientation_error <= std::max(0.0, options.acceptable_orientation_error);
-        if (exact_reached || (acceptable_reached && iter > 0)) {
+        // acceptable_* 只标记最大迭代后的最佳近似解，不再提前终止精调。
+        if (exact_reached) {
             VectorXd res(n_arm);
             for (int i = 0; i < n_arm; ++i)
                 res[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             if (exact_solution) {
-                *exact_solution = exact_reached;
+                *exact_solution = true;
             }
             if (acceptable_solution) {
                 *acceptable_solution = true;
@@ -424,22 +443,19 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             nullspace_activation = t * t * (3.0 - 2.0 * t);
         }
 
-        if (nullspace_activation > 0.0) {
+        VectorXd seed_pull = VectorXd::Zero(n_arm);
+        if (nullspace_activation > 0.0 || options.continuity_nullspace_weight > 0.0) {
             auto limits = getArmJointLimits(arm_side);
             VectorXd q_arm(n_arm);
             for(int i=0; i<n_arm; ++i){
                 q_arm[i] = q[model.joints[model.getJointId(arm_joints[i])].idx_q()];
             } 
 
-            // 零空间舒适关节角度
-            VectorXd q_rest(n_arm);
-            if (arm_side == ArmSide::RIGHT) {
-                q_rest << -0.5, 0.5, 0.5, -0.5, 0.5, 0.0, 0.0;
-            } else {
-                q_rest << -0.5, 0.5, -0.5, -0.5, 0.5, 0.0, 0.0;
-            }
-            // rest 姿态拉力保持较小，主要作用是缓慢离开不舒服构型。
-            double k_rest = 0.08;
+            const VectorXd& q_rest = arm_side == ArmSide::RIGHT
+                ? comfort_right_q_ref_
+                : comfort_left_q_ref_;
+            // 配置权重只作用于零空间舒适姿态，不改变末端任务误差权重。
+            const double k_rest = comfort_nullspace_weight_;
 
             const double threshold_percent = 0.15; // 15% 的边缘触发力场
             const double limit_gain = 0.4;
@@ -465,7 +481,8 @@ Eigen::VectorXd IKSolver::solveIK_Core(
                 double comfort_pull = -k_rest * std::tanh(2.0 * (q_arm[i] - q_rest[i]));
 
                 // 叠加梯度：当靠近限位时，limit_repulsion 会急剧变大，掩盖住 rest 姿态拉力
-                grad_H[i] = limit_repulsion + comfort_pull;
+                grad_H[i] = nullspace_activation * (limit_repulsion + comfort_pull);
+                seed_pull[i] = -std::tanh(2.0 * (q_arm[i] - q_init[i]));
             }
 
             // 对斥力梯度做简单的限幅
@@ -473,11 +490,13 @@ Eigen::VectorXd IKSolver::solveIK_Core(
             for(int i=0; i<n_arm; ++i) 
                 grad_H[i] = std::max(-max_grad, std::min(max_grad, grad_H[i]));
 
-            repulsion_gain = nullspace_activation * singularity_scale * 0.05;
+            repulsion_gain = singularity_scale * 0.05;
         }
 
-        // 基础斥力向量
-        VectorXd g0 = repulsion_gain * grad_H;
+        // 舒适姿态项在奇异区衰减；连续性项以很小的独立增益保留，
+        // 防止翻腕经过奇异区时突然切换到远端等价分支。
+        VectorXd g0 = repulsion_gain * grad_H
+            + options.continuity_nullspace_weight * seed_pull;
         VectorXd dq;
         
         // =====================================================================
@@ -540,6 +559,9 @@ Eigen::VectorXd IKSolver::solveIK_Core(
 
     if (best_error) {
         *best_error = best_error_norm;
+    }
+    if (acceptable_solution) {
+        *acceptable_solution = best_acceptable_solution;
     }
 
     return std::isfinite(best_error_norm) ? best_q_arm : VectorXd();

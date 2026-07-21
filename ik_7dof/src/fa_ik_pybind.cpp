@@ -137,6 +137,17 @@ public:
     {
     }
 
+    void configureComfortNullspace(
+        double weight,
+        const std::vector<double>& left_q_ref,
+        const std::vector<double>& right_q_ref)
+    {
+        solver_->setComfortNullspace(
+            weight,
+            vectorFromStd(left_q_ref, "left_q_ref"),
+            vectorFromStd(right_q_ref, "right_q_ref"));
+    }
+
     py::dict solveArmIk(
         const py::object& translation_obj,
         const py::object& rotation_obj,
@@ -149,20 +160,22 @@ public:
         double position_weight,
         double orientation_weight,
         double acceptable_position_error,
-        double acceptable_orientation_error)
+        double acceptable_orientation_error,
+        double continuity_nullspace_weight)
     {
         const Eigen::Vector3d translation = vector3FromObject(translation_obj, "translation");
         const Eigen::Matrix3d rotation = matrix3FromObject(rotation_obj, "rotation");
         pinocchio::SE3 target(rotation, translation);
 
         const auto side = parseArmSide(arm_side);
-        const auto options = parseOptions(
+        auto options = parseOptions(
             reference_frame,
             skip_svd_fallback,
             position_weight,
             orientation_weight,
             acceptable_position_error,
             acceptable_orientation_error);
+        options.continuity_nullspace_weight = std::max(0.0, continuity_nullspace_weight);
         Eigen::VectorXd q_init = vectorFromStd(initial_q, "initial_q", true);
 
         const auto start = std::chrono::steady_clock::now();
@@ -214,6 +227,10 @@ PYBIND11_MODULE(ik_7dof_pybind, m)
     m.doc() = "pybind11 wrapper for ik_7dof/fa_ik_solver.hpp";
     py::class_<PyFaIkSolver>(m, "FaIkSolver")
         .def(py::init<const std::string&, const std::string&>(), py::arg("urdf_file"), py::arg("srdf_file") = "")
+        .def("configure_comfort_nullspace", &PyFaIkSolver::configureComfortNullspace,
+             py::arg("weight"),
+             py::arg("left_q_ref"),
+             py::arg("right_q_ref"))
         .def("solve_arm_ik", &PyFaIkSolver::solveArmIk,
              py::arg("translation"),
              py::arg("rotation"),
@@ -226,7 +243,8 @@ PYBIND11_MODULE(ik_7dof_pybind, m)
              py::arg("position_weight") = 1.0,
              py::arg("orientation_weight") = 1.0,
              py::arg("acceptable_position_error") = 0.05,
-             py::arg("acceptable_orientation_error") = 0.05)
+             py::arg("acceptable_orientation_error") = 0.05,
+             py::arg("continuity_nullspace_weight") = 0.0)
         .def("compute_arm_fk", &PyFaIkSolver::computeArmFk,
              py::arg("q"),
              py::arg("arm_side"),
