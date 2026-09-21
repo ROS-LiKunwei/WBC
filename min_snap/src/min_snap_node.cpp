@@ -1456,12 +1456,12 @@ private:
   double speed_mode_{4.0};
   Sysmo32ReservedArray reserved_{0.0, 0.0, 0.0, 0.0};
   double neck_joint_{0.0};
-  ArmArray left_lower_limits_{make_arm_array({-2.79, -0.33, -2.79, -1.40, -2.79, -0.52, -1.57})};
-  ArmArray left_upper_limits_{make_arm_array({2.79, 3.49, 2.79, 0.26, 2.79, 0.52, 1.57})};
-  ArmArray right_lower_limits_{make_arm_array({-2.79, -3.49, -2.79, -1.40, -2.79, -0.52, -1.57})};
-  ArmArray right_upper_limits_{make_arm_array({2.79, 0.33, 2.79, 0.26, 2.79, 0.52, 1.57})};
-  NeckArray neck_lower_limits_{make_neck_array({-1.57, -0.52})};
-  NeckArray neck_upper_limits_{make_neck_array({1.57, 0.79})};
+  ArmArray left_lower_limits_{make_arm_array({-2.750, -0.288, -2.650, -2.050, -2.735, -0.469, -1.550})};
+  ArmArray left_upper_limits_{make_arm_array({2.748, 3.342, 2.583, 1.440, 2.729, 0.482, 1.520})};
+  ArmArray right_lower_limits_{make_arm_array({-2.750, -3.330, -2.570, -2.050, -2.730, -0.480, -1.536})};
+  ArmArray right_upper_limits_{make_arm_array({2.750, 0.302, 2.660, 1.440, 2.730, 0.470, 1.532})};
+  NeckArray neck_lower_limits_{make_neck_array({-1.570, -0.523})};
+  NeckArray neck_upper_limits_{make_neck_array({1.570, 0.785})};
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr command_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr desired_joint_state_pub_;
